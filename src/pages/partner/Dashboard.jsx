@@ -53,7 +53,7 @@ export default function PartnerDashboard() {
         {loading ? (
           <div className="empty-state"><p>Loading orders...</p></div>
         ) : myOrders.length === 0 ? (
-          <div className="empty-state"><p>No orders yet. <Link to="/partner/po">Place your first order</Link></p></div>
+          <div className="empty-state"><p>No orders yet. <Link to="/partner/catalog">Place your first order</Link></p></div>
         ) : (
           <div className="table-wrap">
             <table>
