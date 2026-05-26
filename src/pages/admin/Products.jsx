@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
 
-const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_url: '' };
+const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [] };
 const PRODUCT_IMAGES_BUCKET = 'bridgethings-product-images';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -33,37 +33,63 @@ export default function ProductsPage() {
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
 
-  const handleImageUpload = async (file) => {
-    if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      addToast('Please select an image file', 'error');
-      return;
-    }
-    // Reasonable cap so we don't bloat storage with huge files.
-    if (file.size > 5 * 1024 * 1024) {
-      addToast('Image must be smaller than 5 MB', 'error');
-      return;
-    }
-    setUploading(true);
-    try {
-      const path = buildImagePath(file);
-      const { error: uploadErr } = await supabase.storage
-        .from(PRODUCT_IMAGES_BUCKET)
-        .upload(path, file, { contentType: file.type, upsert: false });
-      if (uploadErr) throw uploadErr;
+  // Upload one or more files in sequence, appending each public URL to
+  // the form's image_urls array. The first image (index 0) is treated
+  // as the primary — used for cards and the card thumbnail.
+  const handleImageUpload = async (fileList) => {
+    if (!fileList?.length) return;
+    const files = Array.from(fileList);
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) {
+        addToast(`Skipped "${file.name}" — not an image`, 'error');
+        continue;
+      }
+      if (file.size > 5 * 1024 * 1024) {
+        addToast(`Skipped "${file.name}" — larger than 5 MB`, 'error');
+        continue;
+      }
+      setUploading(true);
+      try {
+        const path = buildImagePath(file);
+        const { error: uploadErr } = await supabase.storage
+          .from(PRODUCT_IMAGES_BUCKET)
+          .upload(path, file, { contentType: file.type, upsert: false });
+        if (uploadErr) throw uploadErr;
 
-      const { data } = supabase.storage
-        .from(PRODUCT_IMAGES_BUCKET)
-        .getPublicUrl(path);
-      setForm(prev => ({ ...prev, image_url: data.publicUrl }));
-      addToast('Image uploaded', 'success');
-    } catch (err) {
-      console.error('[products] image upload failed:', err);
-      addToast(err.message || 'Failed to upload image', 'error');
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+        const { data } = supabase.storage
+          .from(PRODUCT_IMAGES_BUCKET)
+          .getPublicUrl(path);
+        setForm(prev => ({ ...prev, image_urls: [...(prev.image_urls || []), data.publicUrl] }));
+      } catch (err) {
+        console.error('[products] image upload failed:', err);
+        addToast(err.message || `Failed to upload "${file.name}"`, 'error');
+      } finally {
+        setUploading(false);
+      }
     }
+    addToast('Images uploaded', 'success');
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Remove image at index from the array. If it was the primary, the
+  // next image automatically becomes primary.
+  const removeImageAt = (idx) => {
+    setForm(prev => ({
+      ...prev,
+      image_urls: (prev.image_urls || []).filter((_, i) => i !== idx),
+    }));
+  };
+
+  // Promote image at idx to position 0 (primary). Used by the "Set as
+  // primary" thumbnail action.
+  const makePrimaryImage = (idx) => {
+    setForm(prev => {
+      const arr = [...(prev.image_urls || [])];
+      if (idx <= 0 || idx >= arr.length) return prev;
+      const [picked] = arr.splice(idx, 1);
+      arr.unshift(picked);
+      return { ...prev, image_urls: arr };
+    });
   };
 
   const loadProducts = async () => {
@@ -90,13 +116,19 @@ export default function ProductsPage() {
 
   const openNew = () => { setForm(EMPTY); setEditing(null); setShowModal(true); };
   const openEdit = p => {
+    // Hydrate the form's image_urls from the new column. Fall back to
+    // the legacy image_url for products created before the multi-image
+    // migration ran, so admins can still edit and add more.
+    const existing = (p.image_urls && p.image_urls.length)
+      ? p.image_urls
+      : (p.image_url ? [p.image_url] : []);
     setForm({
       name: p.name || '',
       description: p.description || '',
       features: featuresToString(p.features),
       base_price: p.base_price ?? '',
       subscription_price: p.subscription_price ?? '',
-      image_url: p.image_url || '',
+      image_urls: existing,
     });
     setEditing(p.id);
     setShowModal(true);
@@ -105,13 +137,18 @@ export default function ProductsPage() {
   const handleSave = async () => {
     if (!form.name.trim()) { addToast('Product name is required', 'error'); return; }
     setSaving(true);
+    const cleanImages = (form.image_urls || []).map(u => u.trim()).filter(Boolean);
     const payload = {
       name: form.name.trim(),
       description: form.description.trim() || null,
       features: featuresToArray(form.features),
       base_price: parseFloat(form.base_price) || 0,
       subscription_price: parseFloat(form.subscription_price) || 0,
-      image_url: form.image_url.trim() || null,
+      image_urls: cleanImages,
+      // Mirror the primary image back to the legacy column so anywhere
+      // that still reads image_url (card thumbnails, invoices, etc.)
+      // keeps showing the picture without code changes.
+      image_url: cleanImages[0] || null,
     };
 
     try {
@@ -248,45 +285,73 @@ export default function ProductsPage() {
                   <input className="form-input" value={form.features} onChange={e => setForm({...form, features: e.target.value})} placeholder="DN50 to DN2000, HART Output, IP68 Rating" />
                 </div>
                 <div className="form-group" style={{gridColumn:'1 / -1'}}>
-                  <label className="form-label">Product Image</label>
-                  <div style={{display:'flex', gap:'0.5rem', alignItems:'center', marginBottom:'0.5rem'}}>
+                  <label className="form-label">Product Images</label>
+                  <div className="text-xs text-muted" style={{marginBottom:'0.5rem'}}>
+                    Upload one or more shots — the first image is the primary one shown on cards. Click "Set as primary" on any thumbnail to promote it.
+                  </div>
+                  <div style={{display:'flex', gap:'0.5rem', alignItems:'center', marginBottom:'0.75rem'}}>
                     <input
                       ref={fileInputRef}
                       type="file"
                       accept="image/*"
-                      onChange={e => handleImageUpload(e.target.files?.[0])}
+                      multiple
+                      onChange={e => handleImageUpload(e.target.files)}
                       disabled={uploading || saving}
                       style={{flex:'1', fontSize:'0.85rem'}}
                     />
-                    {form.image_url && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        style={{color:'var(--danger)'}}
-                        onClick={() => setForm(prev => ({...prev, image_url:''}))}
-                        disabled={uploading || saving}
-                      >
-                        Remove
-                      </button>
-                    )}
                   </div>
-                  <input
-                    className="form-input"
-                    value={form.image_url}
-                    onChange={e => setForm({...form, image_url: e.target.value})}
-                    placeholder="…or paste an external image URL"
-                    disabled={uploading}
-                    style={{fontSize:'0.85rem'}}
-                  />
-                  {uploading && <div className="text-xs text-muted" style={{marginTop:'0.5rem'}}>Uploading image...</div>}
-                  {form.image_url && !uploading && (
-                    <img
-                      src={form.image_url}
-                      alt="preview"
-                      className="img-preview"
-                      style={{marginTop:'0.5rem', maxHeight:'160px', borderRadius:'6px'}}
-                      onError={e => e.target.style.display='none'}
-                    />
+                  {uploading && <div className="text-xs text-muted" style={{marginBottom:'0.5rem'}}>Uploading...</div>}
+                  {(form.image_urls || []).length === 0 ? (
+                    <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>No images yet.</div>
+                  ) : (
+                    <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(140px, 1fr))', gap:'0.75rem', marginTop:'0.25rem'}}>
+                      {form.image_urls.map((url, idx) => (
+                        <div
+                          key={url + idx}
+                          style={{
+                            border: idx === 0 ? '2px solid var(--primary)' : '1px solid var(--border)',
+                            borderRadius:'8px',
+                            padding:'0.4rem',
+                            background:'#f8fafc',
+                            display:'flex',
+                            flexDirection:'column',
+                            gap:'0.4rem',
+                          }}
+                        >
+                          <img
+                            src={url}
+                            alt={`product ${idx + 1}`}
+                            style={{width:'100%', height:'90px', objectFit:'contain', background:'#fff', borderRadius:'4px'}}
+                            onError={e => e.target.style.display='none'}
+                          />
+                          {idx === 0 && (
+                            <span className="badge badge-info" style={{fontSize:'0.65rem', alignSelf:'flex-start'}}>Primary</span>
+                          )}
+                          <div style={{display:'flex', gap:'0.25rem'}}>
+                            {idx !== 0 && (
+                              <button
+                                type="button"
+                                className="btn btn-ghost btn-sm"
+                                style={{fontSize:'0.7rem', padding:'0.25rem 0.4rem'}}
+                                onClick={() => makePrimaryImage(idx)}
+                                disabled={uploading || saving}
+                              >
+                                Set as primary
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              style={{fontSize:'0.7rem', padding:'0.25rem 0.4rem', color:'var(--danger)', marginLeft:'auto'}}
+                              onClick={() => removeImageAt(idx)}
+                              disabled={uploading || saving}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
@@ -310,8 +375,36 @@ export default function ProductsPage() {
               <button className="modal-close" onClick={() => setShowDetail(null)}>✕</button>
             </div>
             <div className="modal-body">
-              {showDetail.image_url && <img src={showDetail.image_url} alt={showDetail.name} style={{width:'100%', maxHeight:'320px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', marginBottom:'1rem', padding:'0.5rem'}} onError={e => e.target.style.display='none'} />}
-              <p style={{color:'var(--text-muted)', fontSize:'0.9rem', marginBottom:'1rem'}}>{showDetail.description}</p>
+              {(() => {
+                const imgs = (showDetail.image_urls && showDetail.image_urls.length)
+                  ? showDetail.image_urls
+                  : (showDetail.image_url ? [showDetail.image_url] : []);
+                if (!imgs.length) return null;
+                return (
+                  <div style={{marginBottom:'1rem'}}>
+                    <img
+                      src={imgs[0]}
+                      alt={showDetail.name}
+                      style={{width:'100%', maxHeight:'320px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem'}}
+                      onError={e => e.target.style.display='none'}
+                    />
+                    {imgs.length > 1 && (
+                      <div style={{display:'flex', gap:'0.4rem', flexWrap:'wrap', marginTop:'0.5rem'}}>
+                        {imgs.slice(1).map((u, i) => (
+                          <img
+                            key={u + i}
+                            src={u}
+                            alt={`${showDetail.name} ${i + 2}`}
+                            style={{width:'72px', height:'72px', objectFit:'contain', background:'#f8fafc', border:'1px solid var(--border)', borderRadius:'6px'}}
+                            onError={e => e.target.style.display='none'}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+              <p style={{color:'var(--text-muted)', fontSize:'0.9rem', marginBottom:'1rem', whiteSpace:'pre-wrap'}}>{showDetail.description}</p>
               <div style={{fontWeight:600, marginBottom:'0.5rem'}}>Features:</div>
               <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem'}}>
                 {(showDetail.features||[]).map(f => <span key={f} className="badge badge-info">{f}</span>)}

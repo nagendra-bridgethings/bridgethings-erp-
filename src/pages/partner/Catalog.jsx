@@ -24,6 +24,10 @@ export default function Catalog() {
   const discountPct = Number(user?.discount_percent) || 0;
   const [search, setSearch] = useState('');
   const [detail, setDetail] = useState(null);
+  // Index of the gallery thumbnail currently displayed as the big image in
+  // the detail modal. Resets when the modal opens for a new product.
+  const [activeImage, setActiveImage] = useState(0);
+  useEffect(() => { setActiveImage(0); }, [detail?.id]);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Qty prompt state. When the partner clicks "+ Add to PO" we ask for a
@@ -163,11 +167,52 @@ export default function Catalog() {
               <button className="modal-close" onClick={() => setDetail(null)}>✕</button>
             </div>
             <div className="modal-body">
-              {detail.image_url && (
-                <img src={detail.image_url} alt={detail.name}
-                  style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', marginBottom:'1.25rem', padding:'0.5rem'}}
-                  onError={e => e.target.style.display = 'none'} />
-              )}
+              {(() => {
+                // Use the new image_urls array; fall back to image_url for
+                // products created before the multi-image migration.
+                const gallery = (detail.image_urls && detail.image_urls.length)
+                  ? detail.image_urls
+                  : (detail.image_url ? [detail.image_url] : []);
+                if (!gallery.length) return null;
+                const active = Math.min(activeImage, gallery.length - 1);
+                return (
+                  <div style={{marginBottom:'1.25rem'}}>
+                    <img
+                      src={gallery[active]}
+                      alt={detail.name}
+                      style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem'}}
+                      onError={e => e.target.style.display = 'none'}
+                    />
+                    {gallery.length > 1 && (
+                      <div style={{display:'flex', gap:'0.5rem', flexWrap:'wrap', marginTop:'0.6rem'}}>
+                        {gallery.map((url, i) => (
+                          <button
+                            key={url + i}
+                            type="button"
+                            onClick={() => setActiveImage(i)}
+                            style={{
+                              padding:0,
+                              border: i === active ? '2px solid var(--primary)' : '1px solid var(--border)',
+                              borderRadius:'6px',
+                              background:'#f8fafc',
+                              cursor:'pointer',
+                              overflow:'hidden',
+                            }}
+                            aria-label={`View image ${i + 1}`}
+                          >
+                            <img
+                              src={url}
+                              alt={`${detail.name} ${i + 1}`}
+                              style={{width:'68px', height:'68px', objectFit:'contain', display:'block'}}
+                              onError={e => e.target.style.display='none'}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div style={{color:'var(--text-muted)', marginBottom:'1.25rem', lineHeight:'1.6', whiteSpace:'pre-wrap'}}>{detail.description}</div>
               <h4 style={{fontWeight:600, marginBottom:'0.75rem'}}>Key Features</h4>
               <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem', marginBottom:'1.25rem'}}>
