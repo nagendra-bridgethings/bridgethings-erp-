@@ -168,7 +168,7 @@ export default function Catalog() {
                   style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', marginBottom:'1.25rem', padding:'0.5rem'}}
                   onError={e => e.target.style.display = 'none'} />
               )}
-              <p style={{color:'var(--text-muted)', marginBottom:'1.25rem', lineHeight:'1.6'}}>{detail.description}</p>
+              <div style={{color:'var(--text-muted)', marginBottom:'1.25rem', lineHeight:'1.6', whiteSpace:'pre-wrap'}}>{detail.description}</div>
               <h4 style={{fontWeight:600, marginBottom:'0.75rem'}}>Key Features</h4>
               <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem', marginBottom:'1.25rem'}}>
                 {(detail.features||[]).map(f => <span key={f} className="badge badge-info">{f}</span>)}
