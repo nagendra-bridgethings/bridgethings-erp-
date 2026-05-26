@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
+import ImageLightbox from '../../components/ImageLightbox';
 
 const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [] };
 const PRODUCT_IMAGES_BUCKET = 'bridgethings-product-images';
@@ -32,6 +33,8 @@ export default function ProductsPage() {
   const [deletingId, setDeletingId] = useState(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+  // URL passed to <ImageLightbox> when admin clicks an image to verify it.
+  const [lightboxSrc, setLightboxSrc] = useState(null);
 
   // Upload one or more files in sequence, appending each public URL to
   // the form's image_urls array. The first image (index 0) is treated
@@ -385,7 +388,9 @@ export default function ProductsPage() {
                     <img
                       src={imgs[0]}
                       alt={showDetail.name}
-                      style={{width:'100%', maxHeight:'320px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem'}}
+                      onClick={() => setLightboxSrc(imgs[0])}
+                      title="Click to zoom"
+                      style={{width:'100%', maxHeight:'320px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem', cursor:'zoom-in'}}
                       onError={e => e.target.style.display='none'}
                     />
                     {imgs.length > 1 && (
@@ -395,7 +400,9 @@ export default function ProductsPage() {
                             key={u + i}
                             src={u}
                             alt={`${showDetail.name} ${i + 2}`}
-                            style={{width:'72px', height:'72px', objectFit:'contain', background:'#f8fafc', border:'1px solid var(--border)', borderRadius:'6px'}}
+                            onClick={() => setLightboxSrc(u)}
+                            title="Click to zoom"
+                            style={{width:'72px', height:'72px', objectFit:'contain', background:'#f8fafc', border:'1px solid var(--border)', borderRadius:'6px', cursor:'zoom-in'}}
                             onError={e => e.target.style.display='none'}
                           />
                         ))}
@@ -414,6 +421,14 @@ export default function ProductsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {lightboxSrc && (
+        <ImageLightbox
+          src={lightboxSrc}
+          alt={showDetail?.name}
+          onClose={() => setLightboxSrc(null)}
+        />
       )}
     </>
   );

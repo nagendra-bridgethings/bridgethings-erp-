@@ -5,6 +5,7 @@ import { useToast } from '../../lib/toast';
 import { useAuth } from '../../lib/auth';
 import { useCart } from '../../lib/cart';
 import { Link } from 'react-router-dom';
+import ImageLightbox from '../../components/ImageLightbox';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 
@@ -28,6 +29,8 @@ export default function Catalog() {
   // the detail modal. Resets when the modal opens for a new product.
   const [activeImage, setActiveImage] = useState(0);
   useEffect(() => { setActiveImage(0); }, [detail?.id]);
+  // URL passed to <ImageLightbox> when the partner clicks to verify a shot.
+  const [lightboxSrc, setLightboxSrc] = useState(null);
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   // Qty prompt state. When the partner clicks "+ Add to PO" we ask for a
@@ -180,7 +183,9 @@ export default function Catalog() {
                     <img
                       src={gallery[active]}
                       alt={detail.name}
-                      style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem'}}
+                      onClick={() => setLightboxSrc(gallery[active])}
+                      title="Click to zoom"
+                      style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem', cursor:'zoom-in'}}
                       onError={e => e.target.style.display = 'none'}
                     />
                     {gallery.length > 1 && (
@@ -190,6 +195,7 @@ export default function Catalog() {
                             key={url + i}
                             type="button"
                             onClick={() => setActiveImage(i)}
+                            onDoubleClick={() => setLightboxSrc(url)}
                             style={{
                               padding:0,
                               border: i === active ? '2px solid var(--primary)' : '1px solid var(--border)',
@@ -199,6 +205,7 @@ export default function Catalog() {
                               overflow:'hidden',
                             }}
                             aria-label={`View image ${i + 1}`}
+                            title="Click to switch · double-click to zoom"
                           >
                             <img
                               src={url}
@@ -298,6 +305,14 @@ export default function Catalog() {
             </div>
           </div>
         </div>
+      )}
+
+      {lightboxSrc && (
+        <ImageLightbox
+          src={lightboxSrc}
+          alt={detail?.name}
+          onClose={() => setLightboxSrc(null)}
+        />
       )}
     </>
   );
