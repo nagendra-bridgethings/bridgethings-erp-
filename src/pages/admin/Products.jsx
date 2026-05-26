@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
 import ImageLightbox from '../../components/ImageLightbox';
 
-const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [] };
+const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [], datasheet_url: '' };
 const PRODUCT_IMAGES_BUCKET = 'bridgethings-product-images';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -132,6 +132,7 @@ export default function ProductsPage() {
       base_price: p.base_price ?? '',
       subscription_price: p.subscription_price ?? '',
       image_urls: existing,
+      datasheet_url: p.datasheet_url || '',
     });
     setEditing(p.id);
     setShowModal(true);
@@ -152,6 +153,7 @@ export default function ProductsPage() {
       // that still reads image_url (card thumbnails, invoices, etc.)
       // keeps showing the picture without code changes.
       image_url: cleanImages[0] || null,
+      datasheet_url: form.datasheet_url?.trim() || null,
     };
 
     try {
@@ -286,6 +288,16 @@ export default function ProductsPage() {
                 <div className="form-group" style={{gridColumn:'1 / -1'}}>
                   <label className="form-label">Features (comma-separated)</label>
                   <input className="form-input" value={form.features} onChange={e => setForm({...form, features: e.target.value})} placeholder="DN50 to DN2000, HART Output, IP68 Rating" />
+                </div>
+                <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                  <label className="form-label">Datasheet URL</label>
+                  <input
+                    className="form-input"
+                    type="url"
+                    value={form.datasheet_url}
+                    onChange={e => setForm({...form, datasheet_url: e.target.value})}
+                    placeholder="https://...  (link to PDF datasheet — partners click this to view spec sheet)"
+                  />
                 </div>
                 <div className="form-group" style={{gridColumn:'1 / -1'}}>
                   <label className="form-label">Product Images</label>

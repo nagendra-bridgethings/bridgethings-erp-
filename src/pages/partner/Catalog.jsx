@@ -225,6 +225,18 @@ export default function Catalog() {
               <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem', marginBottom:'1.25rem'}}>
                 {(detail.features||[]).map(f => <span key={f} className="badge badge-info">{f}</span>)}
               </div>
+              {detail.datasheet_url && (
+                <div style={{marginBottom:'1.25rem'}}>
+                  <a
+                    href={detail.datasheet_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-secondary btn-sm"
+                  >
+                    View Datasheet ↗
+                  </a>
+                </div>
+              )}
               <div className="divider"/>
               <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'0.75rem', flexWrap:'wrap'}}>
                 <div>
