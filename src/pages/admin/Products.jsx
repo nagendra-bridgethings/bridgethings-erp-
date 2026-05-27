@@ -35,6 +35,11 @@ export default function ProductsPage() {
   const fileInputRef = useRef(null);
   // URL passed to <ImageLightbox> when admin clicks an image to verify it.
   const [lightboxSrc, setLightboxSrc] = useState(null);
+  // Mirrors the partner's gallery swap behaviour: clicking a thumbnail
+  // promotes that image to the big spot. Reset when the detail modal
+  // opens for a different product.
+  const [detailActiveImage, setDetailActiveImage] = useState(0);
+  useEffect(() => { setDetailActiveImage(0); }, [showDetail?.id]);
 
   // Upload one or more files in sequence, appending each public URL to
   // the form's image_urls array. The first image (index 0) is treated
@@ -403,45 +408,84 @@ export default function ProductsPage() {
             </div>
             <div className="modal-body">
               {(() => {
-                const imgs = (showDetail.image_urls && showDetail.image_urls.length)
+                const gallery = (showDetail.image_urls && showDetail.image_urls.length)
                   ? showDetail.image_urls
                   : (showDetail.image_url ? [showDetail.image_url] : []);
-                if (!imgs.length) return null;
+                if (!gallery.length) return null;
+                const active = Math.min(detailActiveImage, gallery.length - 1);
                 return (
-                  <div style={{marginBottom:'1rem'}}>
+                  <div style={{marginBottom:'1.25rem'}}>
                     <img
-                      src={imgs[0]}
+                      src={gallery[active]}
                       alt={showDetail.name}
-                      onClick={() => setLightboxSrc(imgs[0])}
+                      onClick={() => setLightboxSrc(gallery[active])}
                       title="Click to zoom"
-                      style={{width:'100%', maxHeight:'320px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem', cursor:'zoom-in'}}
+                      style={{width:'100%', maxHeight:'340px', objectFit:'contain', background:'#f8fafc', borderRadius:'8px', padding:'0.5rem', cursor:'zoom-in'}}
                       onError={e => e.target.style.display='none'}
                     />
-                    {imgs.length > 1 && (
-                      <div style={{display:'flex', gap:'0.4rem', flexWrap:'wrap', marginTop:'0.5rem'}}>
-                        {imgs.slice(1).map((u, i) => (
-                          <img
-                            key={u + i}
-                            src={u}
-                            alt={`${showDetail.name} ${i + 2}`}
-                            onClick={() => setLightboxSrc(u)}
-                            title="Click to zoom"
-                            style={{width:'72px', height:'72px', objectFit:'contain', background:'#f8fafc', border:'1px solid var(--border)', borderRadius:'6px', cursor:'zoom-in'}}
-                            onError={e => e.target.style.display='none'}
-                          />
+                    {gallery.length > 1 && (
+                      <div style={{display:'flex', gap:'0.5rem', flexWrap:'wrap', marginTop:'0.6rem'}}>
+                        {gallery.map((url, i) => (
+                          <button
+                            key={url + i}
+                            type="button"
+                            onClick={() => setDetailActiveImage(i)}
+                            onDoubleClick={() => setLightboxSrc(url)}
+                            style={{
+                              padding:0,
+                              border: i === active ? '2px solid var(--primary)' : '1px solid var(--border)',
+                              borderRadius:'6px',
+                              background:'#f8fafc',
+                              cursor:'pointer',
+                              overflow:'hidden',
+                            }}
+                            aria-label={`View image ${i + 1}`}
+                            title="Click to switch · double-click to zoom"
+                          >
+                            <img
+                              src={url}
+                              alt={`${showDetail.name} ${i + 1}`}
+                              style={{width:'68px', height:'68px', objectFit:'contain', display:'block'}}
+                              onError={e => e.target.style.display='none'}
+                            />
+                          </button>
                         ))}
                       </div>
                     )}
                   </div>
                 );
               })()}
-              <p style={{color:'var(--text-muted)', fontSize:'0.9rem', marginBottom:'1rem', whiteSpace:'pre-wrap'}}>{showDetail.description}</p>
-              <div style={{fontWeight:600, marginBottom:'0.5rem'}}>Features:</div>
-              <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem'}}>
+              <div style={{color:'var(--text-muted)', marginBottom:'1.25rem', lineHeight:'1.6', whiteSpace:'pre-wrap'}}>{showDetail.description}</div>
+              <h4 style={{fontWeight:600, marginBottom:'0.75rem'}}>Key Features</h4>
+              <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem', marginBottom:'1.25rem'}}>
                 {(showDetail.features||[]).map(f => <span key={f} className="badge badge-info">{f}</span>)}
               </div>
+              {(showDetail.datasheet_url || showDetail.installation_guide_url) && (
+                <div style={{display:'flex', gap:'0.5rem', flexWrap:'wrap', marginBottom:'1.25rem'}}>
+                  {showDetail.datasheet_url && (
+                    <a
+                      href={showDetail.datasheet_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary btn-sm"
+                    >
+                      View Datasheet ↗
+                    </a>
+                  )}
+                  {showDetail.installation_guide_url && (
+                    <a
+                      href={showDetail.installation_guide_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary btn-sm"
+                    >
+                      View Installation Guide ↗
+                    </a>
+                  )}
+                </div>
+              )}
               <div className="divider"/>
-              <div style={{fontSize:'1.25rem', fontWeight:700, color:'var(--primary)'}}>{fmtINR(showDetail.base_price)}</div>
+              <div style={{fontSize:'1.5rem', fontWeight:700, color:'var(--primary)', marginTop:'1rem'}}>{fmtINR(showDetail.base_price)}</div>
             </div>
           </div>
         </div>
