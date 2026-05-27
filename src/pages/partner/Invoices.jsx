@@ -430,7 +430,7 @@ function InvoiceDetail({
           display:'grid', gridTemplateColumns:'1fr 1fr', gap:'1rem', alignItems:'flex-start',
         }}>
           <div>
-            <img src="/BridgeThings.png" alt="Bridge Things" style={{height:'50px', objectFit:'contain'}} />
+            <img src={`${import.meta.env.BASE_URL}BridgeThings.png`} alt="Bridge Things" style={{height:'50px', objectFit:'contain'}} />
           </div>
           <div style={{textAlign:'right', fontSize:'0.85rem', lineHeight:1.55, color:'#1f2937'}}>
             <div style={{fontWeight:700, color:'#0f172a'}}>{COMPANY.name}</div>

@@ -91,7 +91,7 @@ export default function Login() {
 
         {/* Logo — always visible */}
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
-          <img src="/BridgeThings.png" alt="Bridge Things" style={{ height: '60px', objectFit: 'contain' }} />
+          <img src={`${import.meta.env.BASE_URL}BridgeThings.png`} alt="Bridge Things" style={{ height: '60px', objectFit: 'contain' }} />
           <div style={{ color: '#94a3b8', fontSize: '0.78rem', marginTop: '0.4rem', letterSpacing: '0.03em' }}>
             B2B Industrial IoT ERP Portal
           </div>

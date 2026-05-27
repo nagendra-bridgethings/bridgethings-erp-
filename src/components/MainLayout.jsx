@@ -89,7 +89,7 @@ export default function MainLayout() {
             <line x1="3" y1="18" x2="21" y2="18" />
           </svg>
         </button>
-        <img src="/BridgeThings.png" alt="Bridge Things" className="mobile-topbar-logo" />
+        <img src={`${import.meta.env.BASE_URL}BridgeThings.png`} alt="Bridge Things" className="mobile-topbar-logo" />
       </div>
 
       {/* Backdrop to close the drawer when tapped outside it. */}
@@ -98,7 +98,7 @@ export default function MainLayout() {
       {/* Sidebar — adds .mobile-open class so the CSS drawer slides in. */}
       <aside className={`sidebar${mobileOpen ? ' mobile-open' : ''}`}>
         <div className="sidebar-logo">
-          <img src="/BridgeThings.png" alt="Bridge Things" className="sidebar-logo-img" />
+          <img src={`${import.meta.env.BASE_URL}BridgeThings.png`} alt="Bridge Things" className="sidebar-logo-img" />
           <div className="sidebar-portal-label">{getRoleLabel(user.role)} Portal</div>
         </div>
 
