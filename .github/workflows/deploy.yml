@@ -18,7 +18,11 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        # `npm install` (not `npm ci`) so the runner can heal small drifts
+        # between the lockfile and package.json — npm ci is strict and was
+        # failing on transitive @emnapi version pins that resolve differently
+        # on Node 20 (CI) vs the local Node version.
+        run: npm install
 
       - name: Build
         run: npm run build
