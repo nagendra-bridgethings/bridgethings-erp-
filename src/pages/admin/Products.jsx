@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
 import ImageLightbox from '../../components/ImageLightbox';
 
-const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [], datasheet_url: '' };
+const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [], datasheet_url: '', installation_guide_url: '' };
 const PRODUCT_IMAGES_BUCKET = 'bridgethings-product-images';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -133,6 +133,7 @@ export default function ProductsPage() {
       subscription_price: p.subscription_price ?? '',
       image_urls: existing,
       datasheet_url: p.datasheet_url || '',
+      installation_guide_url: p.installation_guide_url || '',
     });
     setEditing(p.id);
     setShowModal(true);
@@ -154,6 +155,7 @@ export default function ProductsPage() {
       // keeps showing the picture without code changes.
       image_url: cleanImages[0] || null,
       datasheet_url: form.datasheet_url?.trim() || null,
+      installation_guide_url: form.installation_guide_url?.trim() || null,
     };
 
     try {
@@ -297,6 +299,16 @@ export default function ProductsPage() {
                     value={form.datasheet_url}
                     onChange={e => setForm({...form, datasheet_url: e.target.value})}
                     placeholder="https://...  (link to PDF datasheet — partners click this to view spec sheet)"
+                  />
+                </div>
+                <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                  <label className="form-label">Installation Guide URL</label>
+                  <input
+                    className="form-input"
+                    type="url"
+                    value={form.installation_guide_url}
+                    onChange={e => setForm({...form, installation_guide_url: e.target.value})}
+                    placeholder="https://...  (link to installation manual — partners click this to view)"
                   />
                 </div>
                 <div className="form-group" style={{gridColumn:'1 / -1'}}>

@@ -225,16 +225,28 @@ export default function Catalog() {
               <div style={{display:'flex', flexWrap:'wrap', gap:'0.5rem', marginBottom:'1.25rem'}}>
                 {(detail.features||[]).map(f => <span key={f} className="badge badge-info">{f}</span>)}
               </div>
-              {detail.datasheet_url && (
-                <div style={{marginBottom:'1.25rem'}}>
-                  <a
-                    href={detail.datasheet_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-secondary btn-sm"
-                  >
-                    View Datasheet ↗
-                  </a>
+              {(detail.datasheet_url || detail.installation_guide_url) && (
+                <div style={{display:'flex', gap:'0.5rem', flexWrap:'wrap', marginBottom:'1.25rem'}}>
+                  {detail.datasheet_url && (
+                    <a
+                      href={detail.datasheet_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary btn-sm"
+                    >
+                      View Datasheet ↗
+                    </a>
+                  )}
+                  {detail.installation_guide_url && (
+                    <a
+                      href={detail.installation_guide_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-secondary btn-sm"
+                    >
+                      View Installation Guide ↗
+                    </a>
+                  )}
                 </div>
               )}
               <div className="divider"/>
