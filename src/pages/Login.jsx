@@ -7,7 +7,7 @@ const ROLES_REDIRECT = { admin: '/admin', employee: '/admin', accountant: '/fina
 
 const ROLE_OPTIONS = [
   { key: 'admin',      label: 'Admin',           color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
-  { key: 'employee',   label: 'Employee',        color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
+  { key: 'employee',   label: 'Operations',      color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
   { key: 'accountant', label: 'Accountant',      color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
   { key: 'partner',    label: 'Channel Partner', color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
 ];

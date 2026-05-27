@@ -37,7 +37,7 @@ function getNav(role) {
 }
 
 function getRoleLabel(role) {
-  return { admin: 'Admin', employee: 'Employee', accountant: 'Accountant', partner: 'Channel Partner' }[role] || role;
+  return { admin: 'Admin', employee: 'Operations', accountant: 'Accountant', partner: 'Channel Partner' }[role] || role;
 }
 
 export default function MainLayout() {

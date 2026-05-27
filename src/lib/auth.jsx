@@ -15,7 +15,7 @@ const ROLE_TABLE = {
 
 const ROLE_LABEL = {
   admin: 'Admin',
-  employee: 'Employee',
+  employee: 'Operations',
   accountant: 'Accountant',
   partner: 'Channel Partner',
 };
