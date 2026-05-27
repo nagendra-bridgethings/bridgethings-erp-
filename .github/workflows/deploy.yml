@@ -1,0 +1,43 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # Pass Supabase credentials at build time — Vite inlines anything
+          # prefixed with VITE_ into the bundle. Set both as GitHub Actions
+          # repository secrets (Settings → Secrets and variables → Actions).
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      # SPA-routing fix for GitHub Pages: copy index.html to 404.html so
+      # any unknown path (e.g. /partner/orders refreshed) still loads the
+      # React app, and the router renders the right page. Without this,
+      # GitHub Pages would serve a real 404.
+      - name: Copy index.html → 404.html for SPA routing
+        run: cp dist/index.html dist/404.html
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
