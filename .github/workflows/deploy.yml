@@ -5,6 +5,11 @@ on:
     branches: [master]
   workflow_dispatch:
 
+# Without this the default GITHUB_TOKEN is read-only and the Deploy step
+# can't push to the gh-pages branch (403 error).
+permissions:
+  contents: write
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
