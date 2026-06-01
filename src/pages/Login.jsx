@@ -215,8 +215,20 @@ export default function Login() {
             boxShadow: '0 4px 24px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.05)',
             overflow: 'hidden',
           }}>
-            <div style={{ padding: '2rem 2rem 0.5rem', textAlign: 'center' }}>
+            <div style={{ padding: '1.25rem 1.5rem 0.5rem', display: 'flex', alignItems: 'center' }}>
               <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}>Choose Your Team</div>
+              <button
+                onClick={handleBack}
+                style={{
+                  marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer',
+                  color: '#64748b', fontSize: '0.85rem', padding: '0.35rem 0.6rem', borderRadius: '6px',
+                  fontFamily: 'inherit', transition: 'background 0.15s',
+                }}
+                onMouseEnter={e => e.target.style.background = '#f1f5f9'}
+                onMouseLeave={e => e.target.style.background = 'none'}
+              >
+                ← Back
+              </button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', padding: '1rem 1.75rem 1.5rem' }}>
               {TEAM_OPTIONS.map(team => (
@@ -239,11 +251,6 @@ export default function Login() {
                   <div style={{ fontWeight: 700, fontSize: '1.35rem', color: '#0f172a' }}>{team.label}</div>
                 </button>
               ))}
-            </div>
-            <div style={{ borderTop: '1px solid #f1f5f9', padding: '0.6rem', textAlign: 'center' }}>
-              <button onClick={handleBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '0.78rem', cursor: 'pointer', fontFamily: 'inherit' }}>
-                ← Back
-              </button>
             </div>
           </div>
         )}
@@ -349,10 +356,6 @@ export default function Login() {
                   {submitting ? 'Signing in...' : `Sign In as ${roleInfo.label}`}
                 </button>
               </form>
-
-              <div style={{ marginTop: '1.25rem', textAlign: 'center', color: '#94a3b8', fontSize: '0.75rem' }}>
-                Trouble logging in? Contact your Bridge Things administrator.
-              </div>
             </div>
 
             <div style={{ borderTop: '1px solid #f1f5f9', padding: '0.85rem', textAlign: 'center', color: '#cbd5e1', fontSize: '0.72rem' }}>
