@@ -15,7 +15,7 @@ const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
 const STATUS_BADGE = {
   pending_approval: { className: 'badge-warning', label: 'Pending Review' },
-  active:           { className: 'badge-info',    label: 'Approved' },
+  active:           { className: 'badge-info',    label: 'In Progress' },
   completed:        { className: 'badge-success', label: 'Completed' },
   rejected:         { className: 'badge-danger',  label: 'Rejected' },
 };

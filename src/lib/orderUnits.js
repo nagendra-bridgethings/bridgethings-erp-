@@ -33,6 +33,46 @@ export async function loadUnitDetailsForItems(itemIds) {
   return map;
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Per-unit production status helpers. Each unit row carries its own
+// hold / production / ready_to_dispatch / sent_back / dispatched state
+// so ops can manage scenarios where some units are stuck (out of stock)
+// while others move forward.
+// ──────────────────────────────────────────────────────────────────────
+
+// Bulk: ops ticks a set of units and picks a target status from the bulk
+// dropdown. Single round-trip; clears any prior send-back note when the
+// move is forward (anything other than 'sent_back').
+export async function setUnitsProductionStatus(unitIds, status) {
+  if (!unitIds?.length) throw new Error('Pick at least one unit');
+  if (!status)          throw new Error('status is required');
+  const patch = {
+    production_status: status,
+    updated_at:        new Date().toISOString(),
+  };
+  if (status !== 'sent_back') patch.dispatch_review_note = null;
+  const { error } = await supabase
+    .from(TABLE)
+    .update(patch)
+    .in('id', unitIds);
+  if (error) throw error;
+}
+
+// Bulk: dispatch flips units back to 'sent_back' with a note.
+export async function sendUnitsBackToOps(unitIds, note) {
+  if (!unitIds?.length) throw new Error('Pick at least one unit');
+  if (!note?.trim())    throw new Error('Please add a note for the operations team');
+  const { error } = await supabase
+    .from(TABLE)
+    .update({
+      production_status:    'sent_back',
+      dispatch_review_note: note.trim(),
+      updated_at:           new Date().toISOString(),
+    })
+    .in('id', unitIds);
+  if (error) throw error;
+}
+
 // Upsert a unit's details. Keyed by (order_item_id, unit_index) which is
 // the table's UNIQUE constraint. Used when an employee saves a unit row.
 export async function upsertUnitDetail({
@@ -41,6 +81,7 @@ export async function upsertUnitDetail({
   deviceType,
   serialNumber,
   sim,
+  simNumber,
   calibratedOn,
   calibrationCertificateUrl,
   warrantyCertificateUrl,
@@ -51,6 +92,7 @@ export async function upsertUnitDetail({
     device_type:                 deviceType?.trim()  || null,
     serial_number:               serialNumber?.trim()|| null,
     sim:                         sim?.trim()         || null,
+    sim_number:                  simNumber?.trim()   || null,
     calibrated_on:               calibratedOn       || null,
     calibration_certificate_url: calibrationCertificateUrl || null,
     warranty_certificate_url:    warrantyCertificateUrl    || null,

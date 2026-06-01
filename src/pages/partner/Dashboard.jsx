@@ -1,8 +1,8 @@
 // Partner — Dashboard
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
-import { useOrders } from '../../lib/orders';
+import { useOrders, derivePartnerStatusLabel, useOrderStatusBreakdown, partnerStatusBadges } from '../../lib/orders';
 import PartnerOrderModal from '../../components/PartnerOrderModal';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -22,12 +22,14 @@ export default function PartnerDashboard() {
     includeStatuses: ['pending_approval', 'rejected'],
     limit: 20,
   });
+  // Per-order unit-status breakdown so the My Recent Orders status column
+  // can show the dynamic "3 Delivered · 1 In Production" view that matches
+  // the partner My Orders page.
+  const orderIds = useMemo(() => myOrders.map(o => o.id), [myOrders]);
+  const breakdownByOrder = useOrderStatusBreakdown(orderIds);
   const [openOrder, setOpenOrder] = useState(null);
   const pendingPayment = myOrders.filter(o => o.payment_status !== 'completed');
   const totalOrdered = myOrders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0);
-
-  const STATUS_COLORS = { draft:'badge-gray', pending_approval:'badge-warning', active:'badge-info', completed:'badge-success', rejected:'badge-danger' };
-  const STATUS_LABELS = { draft:'Draft', pending_approval:'Awaiting Confirmation', active:'Active', completed:'Completed', rejected:'Rejected' };
 
   const reloadAll = async () => { await reload(); await reloadPOs(); };
 
@@ -76,7 +78,10 @@ export default function PartnerDashboard() {
                     >
                       <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
                       <td>{fmtINR(o.total_amount)}</td>
-                      <td><span className={`badge ${STATUS_COLORS[o.status]||'badge-gray'}`}>{STATUS_LABELS[o.status]||o.status}</span></td>
+                      <td>{(() => {
+                        const s = derivePartnerStatusLabel(o);
+                        return <span className={`badge ${s.className}`}>{s.label}</span>;
+                      })()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -109,7 +114,28 @@ export default function PartnerDashboard() {
                     >
                       <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
                       <td>{fmtINR(o.total_amount)}</td>
-                      <td><span className={`badge ${STATUS_COLORS[o.status]||'badge-gray'}`}>{STATUS_LABELS[o.status]||o.status}</span></td>
+                      <td>{(() => {
+                        // Mirror the My Orders page: show per-unit
+                        // breakdown badges once dispatch is approved,
+                        // single rolled-up label otherwise.
+                        const counts = breakdownByOrder[o.id];
+                        const canBreakdown =
+                          counts
+                          && o.dispatch_approval === 'approved'
+                          && (o.status === 'active' || o.status === 'completed');
+                        const badges = canBreakdown ? partnerStatusBadges(counts) : [];
+                        if (badges.length > 0) {
+                          return (
+                            <span style={{display:'inline-flex', gap:'0.25rem', flexWrap:'wrap'}}>
+                              {badges.map((b, i) => (
+                                <span key={i} className={`badge ${b.cls}`}>{b.label}</span>
+                              ))}
+                            </span>
+                          );
+                        }
+                        const s = derivePartnerStatusLabel(o);
+                        return <span className={`badge ${s.className}`}>{s.label}</span>;
+                      })()}</td>
                     </tr>
                   ))}
                 </tbody>

@@ -1,22 +1,27 @@
 // src/lib/orderStepper.js — Shared helper for the order progress stepper.
 //
-// The visible stepper has 5 positions:
-//   1. In Process    — driven by fulfillment_status
-//   2. Payment       — driven by payment_status (Pending / Received / Paid)
-//   3. Ready to Ship — driven by fulfillment_status
-//   4. Shipped       — driven by fulfillment_status
-//   5. Delivered     — driven by fulfillment_status
+// The visible stepper has 4 positions:
+//   1. In Process — driven by fulfillment_status
+//   2. Payment    — driven by payment_status (Pending / Received / Paid)
+//   3. Shipped    — driven by fulfillment_status
+//   4. Delivered  — driven by fulfillment_status
 //
 // We do NOT have a 'payment' value in the fulfillment_status enum; payment
 // is a separate axis. This helper combines the two into a single linear
 // stepper for the UI so a partner/admin can see the order's overall state.
 
-// The fulfillment statuses we actually use (drop the old 'calibration' value).
-const FULFILLMENT_STATUSES = ['in_process', 'ready_to_ship', 'shipped', 'delivered'];
+// Active fulfillment statuses. The legacy 'ready_to_ship' (manual flag from
+// before the per-unit production flow) is collapsed into 'in_process' below.
+const FULFILLMENT_STATUSES = ['in_process', 'shipped', 'delivered'];
 
-// Old 'calibration' value should be treated as 'in_process' for backwards compat
-// with any historical rows.
-const normalizeFulfillment = (ff) => (ff === 'calibration' ? 'in_process' : ff || 'in_process');
+// Map legacy values onto current ones for backwards compat:
+//   'calibration'    — old enum value, never set anymore
+//   'ready_to_ship'  — old manual flag, superseded by per-unit production
+//                      states + shipment trigger that flips to 'shipped'
+const normalizeFulfillment = (ff) => {
+  if (ff === 'calibration' || ff === 'ready_to_ship') return 'in_process';
+  return ff || 'in_process';
+};
 
 const paymentDisplay = (paymentStatus) => {
   if (paymentStatus === 'completed') return { label: 'Paid',     done: true,  active: false };
@@ -47,32 +52,17 @@ export function getOrderStepperSteps(order) {
       active: pay.active,
     },
     {
-      key: 'ready_to_ship',
-      label: 'Ready to Ship',
+      key: 'shipped',
+      label: 'Shipped',
       done:   ffIdx > 1,
       active: ffIdx === 1,
     },
     {
-      key: 'shipped',
-      label: 'Shipped',
-      done:   ffIdx > 2,
-      active: ffIdx === 2,
-    },
-    {
       key: 'delivered',
       label: 'Delivered',
-      done:   ffIdx > 3, // never strictly past 'delivered'
-      active: ffIdx === 3,
+      done:   ffIdx > 2, // never strictly past 'delivered'
+      active: ffIdx === 2,
     },
   ];
 }
 
-// Status options for the admin "Update Fulfillment Status" dropdown.
-// Note: 'calibration' is intentionally excluded since the visual stepper
-// replaces it with Payment.
-export const FULFILLMENT_OPTIONS = [
-  { value: 'in_process',    label: 'In Process'    },
-  { value: 'ready_to_ship', label: 'Ready to Ship' },
-  { value: 'shipped',       label: 'Shipped'       },
-  { value: 'delivered',     label: 'Delivered'     },
-];

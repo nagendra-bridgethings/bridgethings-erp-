@@ -2,11 +2,11 @@
 // Compact list of order IDs; click a row to open a modal with two tabs
 // (Details + Tracking). The modal is shared with the partner Dashboard so
 // the click-to-detail experience is consistent across the portal.
-import { useState } from 'react';
-import { useOrders } from '../../lib/orders';
+import { useMemo, useState } from 'react';
+import { useOrders, derivePartnerStatusLabel, useOrderStatusBreakdown, partnerStatusBadges } from '../../lib/orders';
 import PartnerOrderModal from '../../components/PartnerOrderModal';
 
-const ORDER_STATUS_LABELS = { draft:'Draft', pending_approval:'Awaiting Confirmation', active:'Active', completed:'Completed', rejected:'Rejected' };
+const ORDER_STATUS_LABELS = { draft:'Draft', pending_approval:'Awaiting Confirmation', active:'In Progress', completed:'Completed', rejected:'Rejected' };
 const ORDER_STATUS_COLORS = { draft:'badge-gray', pending_approval:'badge-warning', active:'badge-info', completed:'badge-success', rejected:'badge-danger' };
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
@@ -20,13 +20,32 @@ export default function MyOrders() {
     includeStatuses: ['active', 'completed'],
   });
   const myOrders = allOrders;
+  // Per-order unit-status breakdown (incl. shipped vs delivered split)
+  // so the status column can render "3 Delivered · 1 In Production"
+  // dynamically instead of a single rolled-up label.
+  const orderIds = useMemo(() => myOrders.map(o => o.id), [myOrders]);
+  const breakdownByOrder = useOrderStatusBreakdown(orderIds);
   const [activeTab, setActiveTab] = useState('all');
+  // Payment-status filter so partners can quickly find orders with a
+  // balance still due (partial), unpaid orders, or fully paid ones —
+  // works on top of the status tab + free-text search.
+  const [paymentFilter, setPaymentFilter] = useState('all');
   const [openOrder, setOpenOrder] = useState(null);
   const [search, setSearch] = useState('');
 
   const tabs = ['all', 'active', 'completed'];
+  // Normalise to the three buckets we display; treat missing as 'pending'
+  // so the chip counts add up to the total order count.
+  const paymentBucket = o => o.payment_status || 'pending';
+  const paymentChips = [
+    { key: 'all',       label: 'All Payments' },
+    { key: 'pending',   label: 'Unpaid' },
+    { key: 'partial',   label: 'Partial' },
+    { key: 'completed', label: 'Paid' },
+  ];
   const filtered = (() => {
-    const base = activeTab === 'all' ? myOrders : myOrders.filter(o => o.status === activeTab);
+    let base = activeTab === 'all' ? myOrders : myOrders.filter(o => o.status === activeTab);
+    if (paymentFilter !== 'all') base = base.filter(o => paymentBucket(o) === paymentFilter);
     const term = search.trim().toLowerCase();
     if (!term) return base;
     return base.filter(o => {
@@ -52,6 +71,26 @@ export default function MyOrders() {
             <span className="count">{t === 'all' ? myOrders.length : myOrders.filter(o => o.status === t).length}</span>
           </button>
         ))}
+      </div>
+
+      <div style={{display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap', margin:'0.25rem 0 0.75rem 0'}}>
+        <span className="text-xs text-muted" style={{marginRight:'0.25rem', textTransform:'uppercase', letterSpacing:'0.05em'}}>Payment</span>
+        {paymentChips.map(chip => {
+          const count = chip.key === 'all'
+            ? myOrders.length
+            : myOrders.filter(o => paymentBucket(o) === chip.key).length;
+          const active = paymentFilter === chip.key;
+          return (
+            <button
+              key={chip.key}
+              type="button"
+              className={`btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => setPaymentFilter(chip.key)}
+            >
+              {chip.label} <span className="text-muted" style={{marginLeft:'0.25rem'}}>({count})</span>
+            </button>
+          );
+        })}
       </div>
 
       <div className="card" style={{marginBottom:'1rem'}}>
@@ -96,9 +135,30 @@ export default function MyOrders() {
                     <td className="text-sm">{fmtDate(order.created_at)}</td>
                     <td className="text-sm font-semibold" style={{textAlign:'right'}}>{fmtINR(order.total_amount)}</td>
                     <td>
-                      <span className={`badge ${ORDER_STATUS_COLORS[order.status]||'badge-gray'}`}>
-                        {ORDER_STATUS_LABELS[order.status]||order.status}
-                      </span>
+                      {(() => {
+                        // Show per-unit breakdown badges once dispatch has
+                        // been approved AND the order has progressed past
+                        // the pre-production states. For pending/rejected
+                        // /awaiting-payment etc. the single rolled-up
+                        // label is more informative.
+                        const counts = breakdownByOrder[order.id];
+                        const canBreakdown =
+                          counts
+                          && order.dispatch_approval === 'approved'
+                          && (order.status === 'active' || order.status === 'completed');
+                        const badges = canBreakdown ? partnerStatusBadges(counts) : [];
+                        if (badges.length > 0) {
+                          return (
+                            <span style={{display:'inline-flex', gap:'0.25rem', flexWrap:'wrap'}}>
+                              {badges.map((b, i) => (
+                                <span key={i} className={`badge ${b.cls}`}>{b.label}</span>
+                              ))}
+                            </span>
+                          );
+                        }
+                        const s = derivePartnerStatusLabel(order);
+                        return <span className={`badge ${s.className}`}>{s.label}</span>;
+                      })()}
                     </td>
                     <td>
                       <span className={`badge ${order.payment_status==='completed'?'badge-success':order.payment_status==='partial'?'badge-warning':'badge-danger'}`}>

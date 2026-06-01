@@ -4,19 +4,18 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { usePartners } from '../../lib/partners';
 import { useOrders } from '../../lib/orders';
-import { IGST_LABEL } from '../../lib/tax';
 import { approveDispatch, rejectDispatch } from '../../lib/orders';
+import { resolveOpsTeam } from '../../lib/portalPaths';
 import POReviewModal from '../../components/POReviewModal';
 import { useToast } from '../../lib/toast';
 import { supabase } from '../../lib/supabase';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
-const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
 
 const statusBadge = status => {
   const map = { draft:'badge-gray', pending_approval:'badge-warning', active:'badge-info', completed:'badge-success' };
-  const labels = { draft:'Draft', pending_approval:'Pending Approval', active:'Active', completed:'Completed' };
+  const labels = { draft:'Draft', pending_approval:'Pending Approval', active:'In Progress', completed:'Completed' };
   return <span className={`badge ${map[status]||'badge-gray'}`}>{labels[status]||status}</span>;
 };
 
@@ -27,15 +26,21 @@ export default function AdminDashboard() {
   // Admins see the full picture including Channel Partners, Pending POs,
   // and Revenue Received.
   const isAdmin = user?.role === 'admin';
+  // Dispatch sees an order only after operations has handed off ≥1 unit
+  // (ready_to_dispatch or already dispatched). Mirrors the gate used on
+  // the Orders page so the Dashboard's Active/Completed counts match.
+  const team = user?.role === 'employee' ? resolveOpsTeam(user) : null;
 
   const { partners, getPartner, loading: partnersLoading } = usePartners();
   const { orders, loading: ordersLoading, reload: reloadOrders } = useOrders({ limit: 50 });
   const [productCount, setProductCount] = useState(0);
   const [productsLoading, setProductsLoading] = useState(true);
-  // Selected order for the detail modal — Recent Orders rows open the
-  // shipping/items view; Recent POs rows open the PO review (confirm/reject).
-  const [openOrder, setOpenOrder] = useState(null);
-  const [openPO, setOpenPO]       = useState(null);
+  // Per-order unit-status counts. Used to filter the Active/Completed
+  // count cards for the dispatch role (only counts orders where ops has
+  // handed off ≥1 unit).
+  const [unitStatusByOrder, setUnitStatusByOrder] = useState({});
+  // Recent POs rows open the PO review modal (confirm/reject).
+  const [openPO, setOpenPO] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,6 +57,42 @@ export default function AdminDashboard() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    // Dispatch needs counts for the dispatch-only visibility gate; admin +
+    // ops need them so the Recent Orders status badge mirrors the rollup
+    // shown on the Orders page (e.g. "In Production" instead of the raw
+    // order-status "In Progress").
+    if (!orders.length) return;
+    let cancelled = false;
+    (async () => {
+      const itemIds = orders.flatMap(o => (o.items || []).map(i => i.id));
+      if (!itemIds.length) return;
+      const { data, error } = await supabase
+        .from('bridgethings_order_unit_details')
+        .select('order_item_id, production_status')
+        .in('order_item_id', itemIds);
+      if (cancelled) return;
+      if (error) {
+        console.error('[Dashboard] unit status load failed:', error);
+        return;
+      }
+      const itemToOrder = {};
+      for (const o of orders) {
+        for (const it of (o.items || [])) itemToOrder[it.id] = o.id;
+      }
+      const map = {};
+      for (const row of data || []) {
+        const oid = itemToOrder[row.order_item_id];
+        if (!oid) continue;
+        if (!map[oid]) map[oid] = {};
+        const s = row.production_status || 'hold';
+        map[oid][s] = (map[oid][s] || 0) + 1;
+      }
+      setUnitStatusByOrder(map);
+    })();
+    return () => { cancelled = true; };
+  }, [orders]);
+
   const totalRevenue = orders.reduce((s, o) => s + (Number(o.amount_paid) || 0), 0);
   // Pending = POs the admin can act on right now. POs in 'counter_sent'
   // are waiting on the partner to accept/decline, so they're hidden from
@@ -63,9 +104,19 @@ export default function AdminDashboard() {
   // Employees only see orders that have been cleared for dispatch — full
   // payment (auto-approved) or partial payment that admin has manually
   // approved. Admins see everything.
-  const visibleOrders = isAdmin
-    ? orders
-    : orders.filter(o => o.dispatch_approval === 'approved');
+  //
+  // Dispatch has an extra gate: ops must have actually handed off ≥1 unit
+  // (ready_to_dispatch or dispatched). Otherwise the order is invisible —
+  // even if dispatch is approved, dispatch has nothing to do yet.
+  const visibleOrders = (() => {
+    if (isAdmin) return orders;
+    const approved = orders.filter(o => o.dispatch_approval === 'approved');
+    if (team !== 'dispatch') return approved;
+    return approved.filter(o => {
+      const c = unitStatusByOrder[o.id] || {};
+      return ((c.ready_to_dispatch || 0) + (c.dispatched || 0)) > 0;
+    });
+  })();
   const active    = visibleOrders.filter(o => o.status === 'active');
   const completed = visibleOrders.filter(o => o.status === 'completed');
 
@@ -122,7 +173,8 @@ export default function AdminDashboard() {
         )}
       </div>
 
-      {/* Dispatch Approvals — admin must say yes/no when payment is partial */}
+      {/* Production Approvals — admin must say yes/no when payment is partial
+          before ops can start producing units for this order. */}
       {isAdmin && (
         <DispatchApprovalsCard
           orders={orders}
@@ -132,60 +184,24 @@ export default function AdminDashboard() {
         />
       )}
 
-      {/* Two-column layout: Recent POs (admin-only) + Recent Orders */}
-      <div style={{display:'grid', gridTemplateColumns: isAdmin ? 'repeat(auto-fit, minmax(360px, 1fr))' : '1fr', gap:'1.5rem'}}>
-        {isAdmin && (
-          <div className="card">
-            <div className="card-header">
-              <h2>Recent POs</h2>
-              <Link to="/admin/po-received" className="btn btn-ghost btn-sm">View All →</Link>
-            </div>
-            <div className="table-wrap">
-              <table>
-                <thead><tr><th>Order ID</th><th>Partner</th><th style={{textAlign:'right'}}>Amount</th><th>Status</th></tr></thead>
-                <tbody>
-                  {pending.slice(0, 5).map(o => {
-                    const partner = getPartner(o.partner_id);
-                    return (
-                      <tr
-                        key={o.id}
-                        style={{cursor:'pointer'}}
-                        onClick={() => setOpenPO({ order: o, partner })}
-                        title="Click to review the PO"
-                      >
-                        <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
-                        <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
-                        <td className="text-sm font-semibold" style={{textAlign:'right'}}>{fmtINR(o.total_amount)}</td>
-                        <td>{statusBadge(o.status)}</td>
-                      </tr>
-                    );
-                  })}
-                  {pending.length === 0 && (
-                    <tr><td colSpan={4} style={{textAlign:'center', color:'var(--text-muted)', padding:'1.5rem'}}>No pending POs</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
+      {isAdmin && (
         <div className="card">
           <div className="card-header">
-            <h2>Recent Orders</h2>
-            <Link to="/admin/fulfillment" className="btn btn-ghost btn-sm">View All →</Link>
+            <h2>Recent POs</h2>
+            <Link to="/admin/po-received" className="btn btn-ghost btn-sm">View All →</Link>
           </div>
           <div className="table-wrap">
             <table>
               <thead><tr><th>Order ID</th><th>Partner</th><th style={{textAlign:'right'}}>Amount</th><th>Status</th></tr></thead>
               <tbody>
-                {visibleOrders.filter(o => o.status === 'active' || o.status === 'completed').slice(0, 5).map(o => {
+                {pending.slice(0, 5).map(o => {
                   const partner = getPartner(o.partner_id);
                   return (
                     <tr
                       key={o.id}
                       style={{cursor:'pointer'}}
-                      onClick={() => setOpenOrder({ order: o, partner })}
-                      title="Click to view order details and shipping address"
+                      onClick={() => setOpenPO({ order: o, partner })}
+                      title="Click to review the PO"
                     >
                       <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
                       <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
@@ -194,21 +210,13 @@ export default function AdminDashboard() {
                     </tr>
                   );
                 })}
-                {visibleOrders.filter(o => o.status === 'active' || o.status === 'completed').length === 0 && (
-                  <tr><td colSpan={4} style={{textAlign:'center', color:'var(--text-muted)', padding:'1.5rem'}}>No orders yet</td></tr>
+                {pending.length === 0 && (
+                  <tr><td colSpan={4} style={{textAlign:'center', color:'var(--text-muted)', padding:'1.5rem'}}>No pending POs</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
-      </div>
-
-      {openOrder && (
-        <OrderDetailModal
-          order={openOrder.order}
-          partner={openOrder.partner}
-          onClose={() => setOpenOrder(null)}
-        />
       )}
 
       {openPO && (
@@ -239,7 +247,7 @@ function DispatchApprovalsCard({ orders, getPartner, reload, addToast }) {
     try {
       await approveDispatch(order.id);
       await reload();
-      addToast(`ORD-${shortId(order.id)} cleared for dispatch`, 'success');
+      addToast(`ORD-${shortId(order.id)} approved for production`, 'success');
     } catch (err) {
       console.error('[dispatch] approve failed:', err);
       addToast(err.message || 'Failed to approve dispatch', 'error');
@@ -251,7 +259,7 @@ function DispatchApprovalsCard({ orders, getPartner, reload, addToast }) {
   return (
     <div className="card" style={{marginBottom:'1.5rem', borderLeft:'4px solid var(--warning)'}}>
       <div className="card-header">
-        <h2>Dispatch Approvals <span className="badge badge-warning" style={{marginLeft:'0.5rem'}}>{pending.length}</span></h2>
+        <h2>Production Approvals <span className="badge badge-warning" style={{marginLeft:'0.5rem'}}>{pending.length}</span></h2>
       </div>
       <div className="table-wrap">
         <table>
@@ -338,7 +346,7 @@ function RejectDispatchModal({ order, onClose, onSaved }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{maxWidth:'520px'}}>
         <div className="modal-header">
-          <h3>Reject Dispatch — ORD-{shortId(order.id)}</h3>
+          <h3>Reject Production — ORD-{shortId(order.id)}</h3>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
@@ -368,162 +376,3 @@ function RejectDispatchModal({ order, onClose, onSaved }) {
   );
 }
 
-function OrderDetailModal({ order, partner, onClose }) {
-  // Address lines for shipping. Pull every available partner field so the
-  // employee has a complete shipping label without going elsewhere.
-  const addressParts = [
-    partner?.address,
-    [partner?.city, partner?.state, partner?.pincode].filter(Boolean).join(', '),
-  ].filter(Boolean);
-
-  // Reconstruct the financial breakdown from the order row so admin sees
-  // each component (items, shipping, IGST) separately — not just the
-  // rolled-up total_amount.
-  const itemsSubtotal = (order.items || []).reduce(
-    (s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0),
-    0,
-  );
-  const shipping     = Number(order.shipping_cost) || 0;
-  const tax          = Number(order.tax_amount)    || 0;
-  const totalExclTax = itemsSubtotal + shipping;
-
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal modal-lg" onClick={e => e.stopPropagation()} style={{maxWidth:'720px'}}>
-        <div className="modal-header">
-          <h3>Order ORD-{shortId(order.id)}</h3>
-          <button className="modal-close" onClick={onClose}>✕</button>
-        </div>
-        <div className="modal-body">
-          {/* Top summary band */}
-          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:'1rem', marginBottom:'1.25rem', padding:'1rem', background:'var(--bg)', borderRadius:'8px'}}>
-            <div>
-              <div className="text-xs text-muted">Order Date</div>
-              <div className="font-semibold">{fmtDate(order.created_at)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Status</div>
-              <div>{statusBadge(order.status)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Total (excl. IGST)</div>
-              <div className="font-semibold">{fmtINR(totalExclTax)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Total (incl. IGST)</div>
-              <div className="font-semibold" style={{color:'var(--primary)'}}>{fmtINR(order.total_amount)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Payment</div>
-              <div>
-                <span className={`badge ${order.payment_status==='completed'?'badge-success':order.payment_status==='partial'?'badge-warning':'badge-danger'}`}>
-                  {order.payment_status || '—'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          {/* Ship-to address */}
-          <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
-            Ship To
-          </h4>
-          <div style={{padding:'1rem', border:'1px solid var(--border)', borderRadius:'8px', marginBottom:'1.25rem', lineHeight:1.6}}>
-            <div className="font-semibold">{partner?.name || partner?.company_name || 'Unknown partner'}</div>
-            {partner?.company_name && partner?.name && partner.name !== partner.company_name && (
-              <div className="text-sm">{partner.company_name}</div>
-            )}
-            {addressParts.map((line, i) => (
-              <div key={i} className="text-sm">{line}</div>
-            ))}
-            {partner?.phone && <div className="text-sm" style={{marginTop:'0.4rem'}}>📞 {partner.phone}</div>}
-            {partner?.email && <div className="text-sm text-muted">{partner.email}</div>}
-            {partner?.gst_number && <div className="text-xs text-muted" style={{marginTop:'0.4rem'}}>GSTIN: {partner.gst_number}</div>}
-          </div>
-
-          {/* Items */}
-          <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
-            Items to Ship
-          </h4>
-          <div className="table-wrap" style={{marginBottom:'1.25rem'}}>
-            <table style={{margin:0}}>
-              <thead>
-                <tr>
-                  <th>Product</th>
-                  <th style={{textAlign:'right'}}>Qty</th>
-                  <th style={{textAlign:'right'}}>Unit Price</th>
-                  <th style={{textAlign:'right'}}>Subtotal</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(order.items || []).map(item => {
-                  const price = Number(item.unit_price) || 0;
-                  return (
-                    <tr key={item.id}>
-                      <td className="font-semibold text-sm">{item.product?.name || '—'}</td>
-                      <td style={{textAlign:'right'}}>{item.qty}</td>
-                      <td style={{textAlign:'right'}}>{fmtINR(price)}</td>
-                      <td style={{textAlign:'right'}} className="font-semibold">{fmtINR(price * (Number(item.qty) || 0))}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Financial breakdown */}
-          <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
-            Amount Breakdown
-          </h4>
-          <div style={{padding:'1rem', border:'1px solid var(--border)', borderRadius:'8px', marginBottom:'1.25rem', display:'flex', flexDirection:'column', gap:'0.3rem'}}>
-            <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
-              <span>Items subtotal</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(itemsSubtotal)}</span>
-            </div>
-            <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
-              <span>Shipping{order.delivery_method ? ` (${order.delivery_method})` : ''}</span>
-              <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(shipping)}</span>
-            </div>
-            <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', borderTop:'1px dashed var(--border)', paddingTop:'0.4rem', marginTop:'0.2rem'}}>
-              <span style={{fontWeight:600}}>Total before IGST</span>
-              <span style={{fontWeight:600}}>{fmtINR(totalExclTax)}</span>
-            </div>
-            <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
-              <span>{IGST_LABEL}</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(tax)}</span>
-            </div>
-            <div style={{display:'flex', justifyContent:'space-between', fontSize:'1rem', borderTop:'1px solid var(--border)', paddingTop:'0.5rem', marginTop:'0.25rem'}}>
-              <span style={{fontWeight:700}}>Total payable</span>
-              <span style={{fontWeight:700, color:'var(--primary)', fontSize:'1.2rem'}}>{fmtINR(order.total_amount)}</span>
-            </div>
-          </div>
-
-          {/* Shipping info */}
-          <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
-            Shipping
-          </h4>
-          <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px, 1fr))', gap:'1rem', padding:'1rem', border:'1px solid var(--border)', borderRadius:'8px'}}>
-            <div>
-              <div className="text-xs text-muted">Courier</div>
-              <div className="font-semibold">
-                {order.delivery_method || '—'}
-                {shipping > 0 && <span className="text-xs text-muted" style={{marginLeft:'0.4rem', fontWeight:400}}>({fmtINR(shipping)})</span>}
-              </div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Tracking Number</div>
-              <div className="font-semibold" style={{wordBreak:'break-all'}}>{order.tracking_number || '—'}</div>
-            </div>
-            <div>
-              <div className="text-xs text-muted">Delivered Date</div>
-              <div className="font-semibold">{fmtDate(order.delivered_date)}</div>
-            </div>
-          </div>
-        </div>
-        <div className="modal-footer">
-          <button className="btn btn-secondary" onClick={onClose}>Close</button>
-          <Link to="/admin/fulfillment" className="btn btn-primary" onClick={onClose}>
-            Go to Orders
-          </Link>
-        </div>
-      </div>
-    </div>
-  );
-}

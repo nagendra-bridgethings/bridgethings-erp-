@@ -24,21 +24,6 @@ const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
 const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
-const ORDER_STATUS_LABELS = {
-  draft:            'Draft',
-  pending_approval: 'Awaiting Confirmation',
-  active:           'In Progress',
-  completed:        'Completed',
-  rejected:         'Rejected',
-};
-const ORDER_STATUS_COLORS = {
-  draft:            'badge-gray',
-  pending_approval: 'badge-warning',
-  active:           'badge-info',
-  completed:        'badge-success',
-  rejected:         'badge-danger',
-};
-
 export default function CreatePO() {
   const { user } = useAuth();
   const { addToast } = useToast();
@@ -353,7 +338,6 @@ export default function CreatePO() {
                   <th>Date</th>
                   <th>Items</th>
                   <th>Total</th>
-                  <th>Status</th>
                   <th>Payment</th>
                 </tr>
               </thead>
@@ -374,11 +358,6 @@ export default function CreatePO() {
                     <td className="text-sm">{(o.items || []).length}</td>
                     <td className="text-sm font-semibold">{fmtINR(o.total_amount)}</td>
                     <td>
-                      <span className={`badge ${ORDER_STATUS_COLORS[o.status]||'badge-gray'}`}>
-                        {ORDER_STATUS_LABELS[o.status]||o.status}
-                      </span>
-                    </td>
-                    <td>
                       <span className={`badge ${o.payment_status==='completed'?'badge-success':o.payment_status==='partial'?'badge-warning':'badge-danger'}`}>
                         {o.payment_status || 'pending'}
                       </span>
@@ -396,6 +375,7 @@ export default function CreatePO() {
           order={viewOrder}
           onClose={() => setViewOrder(null)}
           onChanged={reloadOrders}
+          detailsOnly
         />
       )}
     </>

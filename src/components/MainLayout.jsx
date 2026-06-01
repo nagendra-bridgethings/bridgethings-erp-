@@ -2,16 +2,19 @@
 import { Outlet, NavLink, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { ROLES } from '../lib/store';
+import { portalPrefixFor } from '../lib/portalPaths';
 import { useState } from 'react';
 
 
 // Per-link role restrictions. If `roles` is omitted, the link is visible to
 // everyone in this nav (admin + employee). Use this to gate admin-only links.
-const adminNav = [
-  { to: '/admin',                label: 'Dashboard' },
-  { to: '/admin/products',       label: 'Products' },
+// Shared admin-portal links use `${prefix}/...` so the URL reflects the user's
+// team (admin → /admin/*, employee → /operations/* or /dispatch/*).
+const buildAdminNav = (prefix) => [
+  { to: prefix,                  label: 'Dashboard' },
+  { to: `${prefix}/products`,    label: 'Products' },
   { to: '/admin/po-received',    label: 'POs Received', roles: ['admin'] },
-  { to: '/admin/fulfillment',    label: 'Orders' },
+  { to: `${prefix}/fulfillment`, label: 'Orders' },
   { to: '/admin/subscriptions',  label: 'Subscriptions', roles: ['admin'] },
   { to: '/admin/partners',       label: 'Channel Partners', roles: ['admin'] },
   { to: '/admin/audit',          label: 'Audit Logs', roles: ['admin'] },
@@ -30,14 +33,28 @@ const financeNav = [
   { to: '/finance/subscriptions', label: 'Subscriptions' },
 ];
 
-function getNav(role) {
+function getNav(user) {
+  const role = user?.role;
   if (role === ROLES.PARTNER) return partnerNav;
   if (role === ROLES.ACCOUNTANT) return financeNav;
-  return adminNav; // admin & employee
+  return buildAdminNav(portalPrefixFor(user)); // admin & employee
 }
 
-function getRoleLabel(role) {
-  return { admin: 'Admin', employee: 'Operations', accountant: 'Accountant', partner: 'Channel Partner' }[role] || role;
+// For employee role, sidebar branding splits by team. The user's
+// DB-assigned team (user.team) wins; falls back to the localStorage
+// picker value for unassigned users; default is "Operations".
+function getRoleLabel(role, user) {
+  if (role === 'employee') {
+    const dbTeam = user?.team;
+    if (dbTeam === 'dispatch') return 'Dispatch';
+    if (dbTeam === 'operations') return 'Operations';
+    try {
+      const team = localStorage.getItem('bridgethings:lastTeam');
+      if (team === 'dispatch') return 'Dispatch';
+    } catch { /* ignore */ }
+    return 'Operations';
+  }
+  return { admin: 'Admin', accountant: 'Accountant', partner: 'Channel Partner' }[role] || role;
 }
 
 export default function MainLayout() {
@@ -48,7 +65,7 @@ export default function MainLayout() {
 
   // Filter out any nav links that aren't allowed for this specific role.
   // (A link with no `roles` field is shown to everyone in its nav.)
-  const nav = getNav(user.role).filter(
+  const nav = getNav(user).filter(
     item => !item.roles || item.roles.includes(user.role)
   );
   const displayName = user.name || user.email || 'User';
@@ -99,7 +116,7 @@ export default function MainLayout() {
       <aside className={`sidebar${mobileOpen ? ' mobile-open' : ''}`}>
         <div className="sidebar-logo">
           <img src={`${import.meta.env.BASE_URL}BridgeThings.png`} alt="Bridge Things" className="sidebar-logo-img" />
-          <div className="sidebar-portal-label">{getRoleLabel(user.role)} Portal</div>
+          <div className="sidebar-portal-label">{getRoleLabel(user.role, user)} Portal</div>
         </div>
 
         <nav className="nav-links">
@@ -117,7 +134,7 @@ export default function MainLayout() {
             <div className="user-avatar">{initials}</div>
             <div>
               <div className="user-name">{displayName}</div>
-              <div className="user-role">{getRoleLabel(user.role)}</div>
+              <div className="user-role">{getRoleLabel(user.role, user)}</div>
             </div>
           </div>
           <button

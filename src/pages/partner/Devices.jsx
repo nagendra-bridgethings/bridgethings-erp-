@@ -44,9 +44,12 @@ export default function PartnerDevices() {
 
   // RLS scopes order_unit_details to the partner's own units automatically
   // (via the parent order's partner_id check in the policies).
-  // !inner joins + the fulfillment_status filter ensure a unit only shows
-  // up here once the parent order has actually been delivered — partners
-  // shouldn't see devices they haven't received yet.
+  // We filter at the UNIT level on production_status='dispatched' — that's
+  // the trigger-driven state set when a unit is added to a shipment. The
+  // earlier order-level fulfillment_status='delivered' filter was too
+  // restrictive: it hid dispatched units whenever any other unit on the
+  // order was still in production (because the order stays 'shipped'
+  // until everything is delivered).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -62,7 +65,7 @@ export default function PartnerDevices() {
             product:bridgethings_products(id, name, subscription_price)
           )
         `)
-        .eq('item.order.fulfillment_status', 'delivered')
+        .eq('production_status', 'dispatched')
         .order('created_at', { ascending: false });
       if (cancelled) return;
       if (error) {
@@ -101,7 +104,7 @@ export default function PartnerDevices() {
     if (!term) return base;
     return base.filter(r => {
       const hay = [
-        r.unit.serial_number, r.unit.sim, r.unit.dashboard_username,
+        r.unit.serial_number, r.unit.sim, r.unit.sim_number, r.unit.dashboard_username,
         r.unit.item?.product?.name, shortId(r.unit.item?.order?.id),
       ].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
@@ -258,6 +261,7 @@ export default function PartnerDevices() {
                   <th>Product</th>
                   <th>Serial</th>
                   <th>SIM</th>
+                  <th>SIM Number</th>
                   <th>Order</th>
                   <th>Status</th>
                   <th>Expires</th>
@@ -288,6 +292,7 @@ export default function PartnerDevices() {
                       <td className="text-sm font-semibold">{r.unit.item?.product?.name || '—'}</td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.serial_number || '—'}</code></td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim || '—'}</code></td>
+                      <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim_number || '—'}</code></td>
                       <td className="text-sm"><span style={{color:'var(--primary)'}}>ORD-{shortId(r.unit.item?.order?.id)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
                       <td className="text-sm">{fmtDate(r.latest?.end_date)}</td>

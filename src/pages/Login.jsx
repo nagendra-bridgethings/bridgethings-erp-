@@ -2,8 +2,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-
-const ROLES_REDIRECT = { admin: '/admin', employee: '/admin', accountant: '/finance', partner: '/partner' };
+import { portalPrefixFor } from '../lib/portalPaths';
 
 const ROLE_OPTIONS = [
   { key: 'admin',      label: 'Admin',           color: '#2563eb', bg: '#f8faff', border: '#e2e8f0' },
@@ -15,42 +14,99 @@ const ROLE_OPTIONS = [
 // Persist the last-used role so repeat visitors land straight on their
 // login form instead of the role-picker every time.
 const LAST_ROLE_KEY = 'bridgethings:lastRole';
+// Persist the operations sub-team (operations / dispatch). Surfaces in
+// MainLayout for the sidebar branding and in Fulfillment for view-filter.
+const LAST_TEAM_KEY = 'bridgethings:lastTeam';
+
+// Sub-teams shown only when the chosen role is 'employee'. The DB role
+// remains 'employee' for both — the team is a UI/workflow distinction.
+const TEAM_OPTIONS = [
+  { key: 'operations', label: 'Operations' },
+  { key: 'dispatch',   label: 'Dispatch' },
+];
 
 export default function Login() {
   const { login, user, loading } = useAuth();
   const navigate = useNavigate();
 
-  // Initialise from localStorage — if the user picked a role before, jump
-  // straight to step 2 with that role pre-selected.
+  // Initialise from localStorage — if the user picked a role + team
+  // before, skip straight to the login form with those pre-selected.
   const initialRole = (() => {
     try {
       const stored = localStorage.getItem(LAST_ROLE_KEY);
       return stored ? ROLE_OPTIONS.find(r => r.key === stored) || null : null;
     } catch { return null; }
   })();
+  const initialTeam = (() => {
+    try {
+      const stored = localStorage.getItem(LAST_TEAM_KEY);
+      return stored ? TEAM_OPTIONS.find(t => t.key === stored) || null : null;
+    } catch { return null; }
+  })();
 
-  const [step, setStep]         = useState(initialRole ? 2 : 1); // 1 = role select, 2 = login form
+  // Step machine: 'role' → 'team' (only when role=employee) → 'login'.
+  const initialStep = (() => {
+    if (!initialRole) return 'role';
+    if (initialRole.key === 'employee' && !initialTeam) return 'team';
+    return 'login';
+  })();
+
+  const [step, setStep]                 = useState(initialStep);
   const [selectedRole, setSelectedRole] = useState(initialRole);
-  const [email, setEmail]       = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError]       = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState(initialTeam);
+  const [email, setEmail]               = useState('');
+  const [password, setPassword]         = useState('');
+  const [error, setError]               = useState('');
+  const [submitting, setSubmitting]     = useState(false);
 
   useEffect(() => {
     if (!loading && user) {
-      navigate(ROLES_REDIRECT[user.role] || '/partner', { replace: true });
+      // For employees, the DB-assigned team always wins over whatever
+      // they may have picked from the local picker. Mirror it into
+      // localStorage so MainLayout + Fulfillment read it consistently.
+      if (user.role === 'employee' && user.team) {
+        try { localStorage.setItem(LAST_TEAM_KEY, user.team); } catch { /* ignore */ }
+      }
+      navigate(portalPrefixFor(user), { replace: true });
     }
   }, [user, loading, navigate]);
 
   const handleRoleSelect = (role) => {
     setSelectedRole(role);
     setError('');
-    setStep(2);
-    try { localStorage.setItem(LAST_ROLE_KEY, role.key); } catch { /* ignore quota / privacy-mode errors */ }
+    try { localStorage.setItem(LAST_ROLE_KEY, role.key); } catch { /* ignore */ }
+    // Operations role splits further into operations / dispatch teams.
+    if (role.key === 'employee') {
+      setStep('team');
+    } else {
+      setStep('login');
+    }
+  };
+
+  const handleTeamSelect = (team) => {
+    setSelectedTeam(team);
+    setError('');
+    try { localStorage.setItem(LAST_TEAM_KEY, team.key); } catch { /* ignore */ }
+    setStep('login');
   };
 
   const handleBack = () => {
-    setStep(1);
+    // From login form, go back to the previous picker (team if employee, role otherwise).
+    if (step === 'login' && selectedRole?.key === 'employee') {
+      setStep('team');
+    } else if (step === 'team') {
+      setStep('role');
+      setSelectedTeam(null);
+      try { localStorage.removeItem(LAST_TEAM_KEY); } catch { /* ignore */ }
+    } else {
+      setStep('role');
+      setSelectedRole(null);
+      setSelectedTeam(null);
+      try {
+        localStorage.removeItem(LAST_ROLE_KEY);
+        localStorage.removeItem(LAST_TEAM_KEY);
+      } catch { /* ignore */ }
+    }
     setEmail('');
     setPassword('');
     setError('');
@@ -87,7 +143,7 @@ export default function Login() {
       fontFamily: 'Inter, -apple-system, sans-serif',
       padding: '1.5rem',
     }}>
-      <div style={{ width: '100%', maxWidth: step === 1 ? '560px' : '460px', transition: 'max-width 0.3s ease' }}>
+      <div style={{ width: '100%', maxWidth: step === 'role' ? '560px' : '460px', transition: 'max-width 0.3s ease' }}>
 
         {/* Logo — always visible */}
         <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
@@ -97,8 +153,8 @@ export default function Login() {
           </div>
         </div>
 
-        {/* STEP 1 — Role Selection */}
-        {step === 1 && (
+        {/* STEP role — Role Selection */}
+        {step === 'role' && (
           <div style={{
             background: '#fff',
             borderRadius: '16px',
@@ -151,8 +207,49 @@ export default function Login() {
           </div>
         )}
 
-        {/* STEP 2 — Login Form */}
-        {step === 2 && roleInfo && (
+        {/* STEP team — Operations / Dispatch picker (only when employee role) */}
+        {step === 'team' && (
+          <div style={{
+            background: '#fff',
+            borderRadius: '16px',
+            boxShadow: '0 4px 24px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.05)',
+            overflow: 'hidden',
+          }}>
+            <div style={{ padding: '2rem 2rem 0.5rem', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0f172a' }}>Choose Your Team</div>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', padding: '1rem 1.75rem 1.5rem' }}>
+              {TEAM_OPTIONS.map(team => (
+                <button
+                  key={team.key}
+                  onClick={() => handleTeamSelect(team)}
+                  style={{
+                    background: '#fff',
+                    border: '1.5px solid #e2e8f0',
+                    borderRadius: '10px',
+                    padding: '1.1rem 1.25rem',
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    transition: 'all 0.15s',
+                    fontFamily: 'inherit',
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = '#2563eb'; e.currentTarget.style.background = '#f0f5ff'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = '#e2e8f0'; e.currentTarget.style.background = '#fff'; }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: '1.35rem', color: '#0f172a' }}>{team.label}</div>
+                </button>
+              ))}
+            </div>
+            <div style={{ borderTop: '1px solid #f1f5f9', padding: '0.6rem', textAlign: 'center' }}>
+              <button onClick={handleBack} style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '0.78rem', cursor: 'pointer', fontFamily: 'inherit' }}>
+                ← Back
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* STEP login — Login Form */}
+        {step === 'login' && roleInfo && (
           <div style={{
             background: '#fff',
             borderRadius: '16px',

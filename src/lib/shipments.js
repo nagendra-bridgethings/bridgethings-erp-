@@ -125,6 +125,26 @@ export async function markShipmentDelivered(shipmentId, deliveredDate) {
   if (error) throw error;
 }
 
+// Patch shipment fields after creation — used when dispatch creates the
+// shipment as a "plan" (no AWB yet), waits for partner docs, then fills
+// in the tracking number and actual shipped date once the parcel is on
+// its way. Pass only the fields that change; nulls/undefineds are
+// preserved verbatim by Supabase's update.
+export async function updateShipment(shipmentId, patch) {
+  if (!shipmentId) throw new Error('shipmentId is required');
+  const clean = {};
+  if ('courier'         in patch) clean.courier         = patch.courier?.trim()        || null;
+  if ('trackingNumber'  in patch) clean.tracking_number = patch.trackingNumber?.trim() || null;
+  if ('shippedDate'     in patch) clean.shipped_date    = patch.shippedDate            || null;
+  if ('notes'           in patch) clean.notes           = patch.notes?.trim()          || null;
+  if (Object.keys(clean).length === 0) return;
+  const { error } = await supabase
+    .from(SHIPMENTS_TABLE)
+    .update(clean)
+    .eq('id', shipmentId);
+  if (error) throw error;
+}
+
 // Drop a shipment (and its items via ON DELETE CASCADE). Trigger
 // recomputes the order status.
 export async function deleteShipment(shipmentId) {
