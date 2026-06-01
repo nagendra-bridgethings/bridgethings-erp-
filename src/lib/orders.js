@@ -139,11 +139,7 @@ export async function createOrder({
 export async function confirmOrder(orderId, employeeNotes) {
   const { data: current, error: readErr } = await supabase
     .from('bridgethings_orders')
-    .select(`
-      id,
-      requested_delivery_date, proposed_delivery_date, delivery_negotiation_status,
-      partner:bridgethings_channelpartners!partner_id ( id, email, name )
-    `)
+    .select('requested_delivery_date, proposed_delivery_date, delivery_negotiation_status')
     .eq('id', orderId)
     .single();
   if (readErr) throw readErr;
@@ -162,25 +158,6 @@ export async function confirmOrder(orderId, employeeNotes) {
     })
     .eq('id', orderId);
   if (orderErr) throw orderErr;
-
-  // Fire-and-forget partner notification. notify() swallows its own
-  // errors so a failed email won't roll back the confirmation.
-  if (current.partner?.email) {
-    const { notify } = await import('./notify');
-    notify(
-      'po_accepted',
-      { email: current.partner.email, name: current.partner.name, userId: current.partner.id, role: 'partner' },
-      {
-        orderShortId:  'ORD-' + String(current.id).slice(0, 8).toUpperCase(),
-        partnerName:   current.partner.name || '',
-        committedDate: committed
-          ? new Date(committed).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' })
-          : '',
-        notes:         employeeNotes?.trim() || '',
-      },
-      { relatedOrderId: orderId },
-    );
-  }
 }
 
 /**
