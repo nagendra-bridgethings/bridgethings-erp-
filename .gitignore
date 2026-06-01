@@ -8,6 +8,11 @@ node_modules/
 .env.local
 .env.*.local
 
+# Secret-bearing SQL bootstraps. Files named *_INSERT_ME.sql are
+# expected to contain real API keys / passwords that get pasted into
+# the Supabase SQL editor once. Keep them out of git.
+sql/*_INSERT_ME.sql
+
 # Build output
 dist/
 dist-ssr/
