@@ -252,6 +252,9 @@ export default function Login() {
                 </button>
               ))}
             </div>
+            <div style={{ borderTop: '1px solid #f1f5f9', padding: '0.85rem', textAlign: 'center', color: '#cbd5e1', fontSize: '0.72rem' }}>
+              © 2026 Bridge Things. All rights reserved.
+            </div>
           </div>
         )}
 
