@@ -181,7 +181,7 @@ BEGIN
     v_body := 'Hi ' || who || ',' ||
               E'\n\nUnfortunately your purchase order ORD-' || ord || ' was not accepted.' ||
               CASE WHEN note <> '' THEN E'\nReason: ' || note ELSE '' END ||
-              E'\n\nView details: ' || url || '/partner/orders';
+              E'\n\nView details: ' || url || '/partner/po';
 
   ELSIF p_template = 'delivery_counter' THEN
     v_subject := 'New delivery date proposed for ORD-' || ord;
@@ -189,7 +189,7 @@ BEGIN
               E'\n\nWe have proposed a new delivery date for ORD-' || ord || ': ' ||
               COALESCE(p_vars->>'proposedDate','') || '.' ||
               CASE WHEN note <> '' THEN E'\nNote: ' || note ELSE '' END ||
-              E'\n\nAccept or decline it here: ' || url || '/partner/orders';
+              E'\n\nAccept or decline it here: ' || url || '/partner/po';
 
   ELSIF p_template = 'counter_accepted' THEN
     v_subject := who || ' accepted the delivery date for ORD-' || ord;
