@@ -67,26 +67,32 @@ export default function Fulfillment() {
   // (filter on "any unit ready").
   const [unitStatusByOrder, setUnitStatusByOrder] = useState({});
 
-  // Ops/admin see every active+completed order, including ones still
-  // awaiting payment or admin dispatch-approval — they need visibility
-  // so they can prep unit details ahead of payment clearing. The
-  // ShipmentsPanel itself blocks the "+ Add Shipment" action until
-  // dispatch_approval='approved', so there's no risk of shipping early.
+  // Admin keeps full oversight — sees every active+completed order,
+  // including ones still awaiting payment or dispatch approval, so they
+  // can manage approvals and prep.
   //
-  // Dispatch sees an order ONLY when ops has actually handed off at
-  // least one unit — i.e., a unit is currently sent_for_dispatch (in
-  // their queue) OR has already been dispatched (so they can keep
-  // tracking it post-ship). Orders still entirely in hold/production
-  // stay invisible to dispatch.
+  // Operations & Dispatch EMPLOYEES only see orders that have been cleared
+  // for dispatch (dispatch_approval='approved'). Full payment auto-approves
+  // via the recompute trigger; a partial payment needs the admin to approve
+  // first. Until then the order stays hidden from the floor.
+  //
+  // Dispatch additionally sees an order ONLY once ops has handed off at
+  // least one unit (ready_to_dispatch, or already dispatched so they can
+  // keep tracking it). Orders still entirely in hold/production stay
+  // invisible to dispatch.
   //
   // Memoized so downstream effects keyed on `orders` don't re-run on
   // every render (Array.filter returns a new ref each time).
+  const isAdmin = user?.role === 'admin';
   const orders = useMemo(() => allOrders.filter(o => {
-    if (team !== 'dispatch') return true;
+    if (isAdmin) return true;
     if (o.dispatch_approval !== 'approved') return false;
-    const c = unitStatusByOrder[o.id] || {};
-    return ((c.ready_to_dispatch || 0) + (c.dispatched || 0)) > 0;
-  }), [allOrders, team, unitStatusByOrder]);
+    if (team === 'dispatch') {
+      const c = unitStatusByOrder[o.id] || {};
+      return ((c.ready_to_dispatch || 0) + (c.dispatched || 0)) > 0;
+    }
+    return true; // operations employee: any approved order
+  }), [allOrders, isAdmin, team, unitStatusByOrder]);
 
   useEffect(() => {
     // Ops needs counts for the row breakdown badges; dispatch needs them

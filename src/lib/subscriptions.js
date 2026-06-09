@@ -181,7 +181,8 @@ export async function requestSubscriptions(items) {
   // Notify accountants there are subscription requests to approve.
   const ctx = await unitContext(items[0].unitId);
   notify('sub_requested', { group: 'accountants' },
-    { partnerName: ctx.party?.partner?.name || 'A partner', deviceCount: String(items.length) },
+    { partnerName: ctx.party?.partner?.name || 'A partner', partnerEmail: ctx.party?.partner?.email,
+      deviceCount: String(items.length) },
     { relatedOrderId: ctx.orderId });
   return data;
 }

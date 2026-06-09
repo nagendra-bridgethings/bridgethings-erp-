@@ -8,18 +8,6 @@ import { supabase } from './supabase';
 import { computeOrderTotal } from './tax';
 import { notify, loadOrderParty, orderShortId, fmtDate } from './notify';
 
-// Re-read an order's dispatch_approval after a mutation that may have
-// flipped it (directly or via the payment trigger). Used to decide
-// whether to fire the "cleared for production" notifications.
-async function fetchDispatchApproval(orderId) {
-  const { data } = await supabase
-    .from('bridgethings_orders')
-    .select('dispatch_approval')
-    .eq('id', orderId)
-    .maybeSingle();
-  return data?.dispatch_approval || null;
-}
-
 // Fire the two "order cleared for dispatch" notifications: the partner
 // ("production starting") and the operations team ("ready to produce").
 // Exported so payments.js can reuse it after a payment completes the
@@ -160,7 +148,8 @@ export async function createOrder({
   // Notify admins a new PO landed in their review queue.
   const party = await loadOrderParty(order.id);
   notify('po_submitted', { group: 'admins' },
-    { orderShortId: orderShortId(order.id), partnerName: party?.partner?.name || 'A partner' },
+    { orderShortId: orderShortId(order.id), partnerName: party?.partner?.name || 'A partner',
+      partnerEmail: party?.partner?.email },
     { relatedOrderId: order.id });
 
   return { ...order, items: insertedItems };
@@ -272,7 +261,8 @@ export async function acceptDeliveryCounter(orderId) {
   // Notify admins the partner accepted — the order is now active.
   const party = await loadOrderParty(orderId);
   notify('counter_accepted', { group: 'admins' },
-    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner' },
+    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner',
+      partnerEmail: party?.partner?.email },
     { relatedOrderId: orderId });
 }
 
@@ -295,7 +285,8 @@ export async function declineDeliveryCounter(orderId) {
   // Notify admins the partner declined — the order was rejected.
   const party = await loadOrderParty(orderId);
   notify('counter_declined', { group: 'admins' },
-    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner' },
+    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner',
+      partnerEmail: party?.partner?.email },
     { relatedOrderId: orderId });
 }
 

@@ -160,11 +160,17 @@ DECLARE
   amt    TEXT := COALESCE(p_vars->>'amount', '');
   bal    TEXT := COALESCE(p_vars->>'balance', '');
   note   TEXT := COALESCE(p_vars->>'notes', '');
+  eml    TEXT := COALESCE(p_vars->>'partnerEmail', '');
   url    TEXT := p_portal_url;
+  -- " (partner@email)" suffix for staff mails so accounts/admin can see
+  -- exactly which partner an internal notification is about.
+  who_e  TEXT := COALESCE(p_vars->>'partnerName', 'A partner')
+                 || CASE WHEN COALESCE(p_vars->>'partnerEmail','') <> ''
+                         THEN ' (' || (p_vars->>'partnerEmail') || ')' ELSE '' END;
 BEGIN
   IF p_template = 'po_submitted' THEN
     v_subject := 'New PO ORD-' || ord || ' from ' || who;
-    v_body := 'A new purchase order (ORD-' || ord || ') has been submitted by ' || who || '.' ||
+    v_body := 'A new purchase order (ORD-' || ord || ') has been submitted by ' || who_e || '.' ||
               E'\n\nReview it here: ' || url || '/admin/po-received';
 
   ELSIF p_template = 'po_confirmed' THEN
@@ -193,20 +199,20 @@ BEGIN
 
   ELSIF p_template = 'counter_accepted' THEN
     v_subject := who || ' accepted the delivery date for ORD-' || ord;
-    v_body := who || ' accepted the proposed delivery date for ORD-' || ord ||
+    v_body := who_e || ' accepted the proposed delivery date for ORD-' || ord ||
               '. The order is now active.' ||
               E'\n\n' || url || '/admin/po-received';
 
   ELSIF p_template = 'counter_declined' THEN
     v_subject := who || ' declined the delivery date for ORD-' || ord;
-    v_body := who || ' declined the proposed delivery date for ORD-' || ord ||
+    v_body := who_e || ' declined the proposed delivery date for ORD-' || ord ||
               '. The order has been rejected.' ||
               E'\n\n' || url || '/admin/po-received';
 
   ELSIF p_template = 'payment_submitted' THEN
     v_subject := 'Payment proof submitted for ORD-' || ord ||
                  CASE WHEN amt <> '' THEN ' (Rs ' || amt || ')' ELSE '' END;
-    v_body := who || ' submitted a payment' ||
+    v_body := who_e || ' submitted a payment' ||
               CASE WHEN amt <> '' THEN ' of Rs ' || amt ELSE '' END ||
               ' for ORD-' || ord || ' awaiting verification.' ||
               E'\n\nVerify it here: ' || url || '/finance';
@@ -241,6 +247,15 @@ BEGIN
               E'\n\nORD-' || ord || ' is on hold pending payment.' ||
               CASE WHEN note <> '' THEN E'\nDetails: ' || note ELSE '' END ||
               E'\n\n' || url || '/partner/orders';
+
+  ELSIF p_template = 'dispatch_pending' THEN
+    -- Partial payment verified → order is waiting on the admin to approve
+    -- (or reject) dispatch before production can start.
+    v_subject := 'ORD-' || ord || ' awaiting your dispatch approval';
+    v_body := who_e || ' made a partial payment on ORD-' || ord || '.' ||
+              CASE WHEN amt <> '' THEN E'\nPaid so far: Rs ' || amt ELSE '' END ||
+              CASE WHEN bal <> '' THEN E'\nOutstanding: Rs ' || bal ELSE '' END ||
+              E'\n\nApprove or reject dispatch on your dashboard: ' || url || '/admin';
 
   ELSIF p_template = 'production_ready' THEN
     v_subject := 'ORD-' || ord || ' ready to produce';
@@ -291,7 +306,7 @@ BEGIN
 
   ELSIF p_template = 'sub_requested' THEN
     v_subject := 'Subscription request from ' || who;
-    v_body := who || ' requested dashboard subscriptions for ' ||
+    v_body := who_e || ' requested dashboard subscriptions for ' ||
               COALESCE(p_vars->>'deviceCount','one or more') || ' device(s).' ||
               ' Approve once payment is received.' ||
               E'\n\n' || url || '/finance/subscriptions';

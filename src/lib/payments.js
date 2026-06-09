@@ -47,8 +47,18 @@ async function afterPaymentApplied(orderId, beforeApproval, amountApplied) {
       { relatedOrderId: orderId });
   }
 
-  if (beforeApproval !== 'approved' && ord?.dispatch_approval === 'approved') {
+  const nowApproval = ord?.dispatch_approval;
+  if (beforeApproval !== 'approved' && nowApproval === 'approved') {
+    // Fully paid → auto-approved. Tell partner + operations, no admin step.
     await notifyDispatchCleared(orderId);
+  } else if (beforeApproval !== 'pending' && nowApproval === 'pending') {
+    // Partial payment → order is now waiting on the admin to approve
+    // dispatch. Email the admins so they know to action it.
+    notify('dispatch_pending', { group: 'admins' },
+      { orderShortId: orderShortId(orderId),
+        partnerName: party?.partner?.name, partnerEmail: party?.partner?.email,
+        amount: fmtAmount(ord?.amount_paid), balance: fmtAmount(balance) },
+      { relatedOrderId: orderId });
   }
 }
 
@@ -182,7 +192,7 @@ export async function submitPaymentProof({
   const party = await loadOrderParty(orderId);
   notify('payment_submitted', { group: 'accountants' },
     { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'A partner',
-      amount: fmtAmount(amount) },
+      partnerEmail: party?.partner?.email, amount: fmtAmount(amount) },
     { relatedOrderId: orderId });
   return data;
 }
