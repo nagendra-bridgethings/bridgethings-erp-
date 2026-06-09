@@ -1,7 +1,7 @@
 // Shared partner-facing modal: Details + Tracking for a single order.
 // Used by /partner/orders and /partner (dashboard) so clicking an order ID
 // anywhere gives the partner the same view.
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getOrderStepperSteps } from '../lib/orderStepper';
 import { loadUnitDetailsForItems } from '../lib/orderUnits';
 import { acceptDeliveryCounter, declineDeliveryCounter, saveShipTo, derivePartnerStatusLabel } from '../lib/orders';
@@ -69,6 +69,21 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
     })();
     return () => { cancelled = true; };
   }, [order]);
+
+  // Per-item delivered quantity, derived from shipments that have a
+  // delivered_date. Lets the Details badge show a dispatched unit as
+  // "Delivered" once its parcel has landed, instead of staying "Dispatched".
+  const { shipments } = useShipmentsForOrder(order?.id);
+  const deliveredByItem = useMemo(() => {
+    const m = {};
+    for (const s of shipments || []) {
+      if (!s.delivered_date) continue;
+      for (const si of (s.items || [])) {
+        m[si.order_item_id] = (m[si.order_item_id] || 0) + (Number(si.qty) || 0);
+      }
+    }
+    return m;
+  }, [shipments]);
 
   const itemsSubtotal = (order.items || []).reduce(
     (s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0),
@@ -212,6 +227,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
               shipping={shipping}
               tax={tax}
               unitsByItem={unitsByItem}
+              deliveredByItem={deliveredByItem}
               // Production state (per-item badge + unit details) only makes
               // sense once payment has cleared and dispatch is approved —
               // before that, ops hasn't started and everything is 'hold' by
@@ -236,7 +252,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
   );
 }
 
-function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, showUnits = true }) {
+function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, deliveredByItem = {}, showUnits = true }) {
   return (
     <>
       <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
@@ -274,6 +290,19 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, showUnit
                       acc[s] = (acc[s] || 0) + 1;
                       return acc;
                     }, {});
+                    // A 'dispatched' unit is "Delivered" once its parcel has a
+                    // delivered_date, else "Shipped" (in transit). Split the
+                    // dispatched count using this item's delivered quantity so
+                    // the badge matches the My Orders list (which is already
+                    // shipment-aware) instead of showing a stale "Dispatched".
+                    const dispatched = counts.dispatched || 0;
+                    if (dispatched > 0) {
+                      const deliveredQty = Math.min(dispatched, deliveredByItem[item.id] || 0);
+                      const shippedQty   = dispatched - deliveredQty;
+                      delete counts.dispatched;
+                      if (deliveredQty > 0) counts.delivered = deliveredQty;
+                      if (shippedQty   > 0) counts.shipped   = shippedQty;
+                    }
                     if (Object.keys(counts).length === 0) {
                       // Units haven't loaded yet — single fallback badge from
                       // the item-level rollup.
@@ -287,18 +316,20 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, showUnit
                       }[s] || { className: 'badge-gray', label: s };
                       return <span className={`badge ${fallback.className}`}>{fallback.label}</span>;
                     }
-                    const ORDER = ['hold', 'production', 'ready_to_dispatch', 'dispatched'];
+                    const ORDER = ['hold', 'production', 'ready_to_dispatch', 'shipped', 'delivered'];
                     const LBL = {
                       hold:              'In Progress',
                       production:        'In Production',
                       ready_to_dispatch: 'Sent for Dispatch',
-                      dispatched:        'Dispatched',
+                      shipped:           'Shipped',
+                      delivered:         'Delivered',
                     };
                     const CLS = {
                       hold:              'badge-info',
                       production:        'badge-info',
                       ready_to_dispatch: 'badge-warning',
-                      dispatched:        'badge-success',
+                      shipped:           'badge-purple',
+                      delivered:         'badge-success',
                     };
                     return (
                       <span style={{display:'inline-flex', gap:'0.25rem', flexWrap:'wrap'}}>
