@@ -58,6 +58,10 @@ export default function Fulfillment() {
   // Loaded once after the orders list arrives so each row can show
   // "shipped / ordered" without opening the modal.
   const [shippedByOrder, setShippedByOrder] = useState({});
+  // Map order_id → units that are in shipments already marked delivered.
+  // Lets the dispatch list show "Delivered" instead of "Shipped" once a
+  // parcel has landed.
+  const [deliveredByOrder, setDeliveredByOrder] = useState({});
   // Map order_id → array of { courier, tracking_number } per shipment,
   // ordered oldest-first. The list column renders one AWB per line so
   // dispatch can see every parcel's tracking without opening the order.
@@ -140,7 +144,7 @@ export default function Fulfillment() {
       // one (which is what order.tracking_number stores).
       const { data, error } = await supabase
         .from('bridgethings_shipments')
-        .select('order_id, courier, tracking_number, shipped_date, items:bridgethings_shipment_items(qty)')
+        .select('order_id, courier, tracking_number, shipped_date, delivered_date, items:bridgethings_shipment_items(qty)')
         .in('order_id', orderIds)
         .order('shipped_date', { ascending: true })
         .order('created_at',   { ascending: true });
@@ -150,6 +154,7 @@ export default function Fulfillment() {
         return;
       }
       const qtyMap = {};
+      const deliveredMap = {};
       const trackingMap = {};
       for (const s of data || []) {
         const sumForShipment = (s.items || []).reduce(
@@ -157,6 +162,9 @@ export default function Fulfillment() {
           0,
         );
         qtyMap[s.order_id] = (qtyMap[s.order_id] || 0) + sumForShipment;
+        if (s.delivered_date) {
+          deliveredMap[s.order_id] = (deliveredMap[s.order_id] || 0) + sumForShipment;
+        }
         if (s.tracking_number || s.courier) {
           if (!trackingMap[s.order_id]) trackingMap[s.order_id] = [];
           trackingMap[s.order_id].push({
@@ -166,6 +174,7 @@ export default function Fulfillment() {
         }
       }
       setShippedByOrder(qtyMap);
+      setDeliveredByOrder(deliveredMap);
       setTrackingByOrder(trackingMap);
     })();
     return () => { cancelled = true; };
@@ -440,19 +449,23 @@ export default function Fulfillment() {
                           );
                         })() : team === 'dispatch' ? (() => {
                           // Dispatch view: surface what ops has handed off
-                          // (ready_to_dispatch = "to ship") and what's
-                          // already been packed (dispatched = "shipped"),
-                          // not the raw shipped/ordered tally.
+                          // (ready_to_dispatch = "to ship") and what's already
+                          // been packed (dispatched). Of the dispatched units,
+                          // the ones whose parcel has a delivered_date show as
+                          // "Delivered"; the rest are "Shipped" (in transit).
                           const counts = unitStatusByOrder[order.id] || {};
                           const ready = counts.ready_to_dispatch || 0;
                           const dispatched = counts.dispatched || 0;
+                          const delivered = Math.min(dispatched, deliveredByOrder[order.id] || 0);
+                          const inTransit = dispatched - delivered;
                           if (ready === 0 && dispatched === 0) {
                             return <span className="text-muted">Nothing from ops yet</span>;
                           }
                           return (
                             <span style={{display:'inline-flex', gap:'0.25rem', flexWrap:'wrap'}}>
                               {ready > 0 && <span className="badge badge-warning">{ready} To Ship</span>}
-                              {dispatched > 0 && <span className="badge badge-success">{dispatched} Shipped</span>}
+                              {inTransit > 0 && <span className="badge badge-purple">{inTransit} Shipped</span>}
+                              {delivered > 0 && <span className="badge badge-success">{delivered} Delivered</span>}
                             </span>
                           );
                         })() : (
