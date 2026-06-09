@@ -193,14 +193,15 @@ export async function requestSubscriptions(items) {
 // a reset.
 export async function setDashboardCredentials(unitId, { username, password }) {
   if (!unitId) throw new Error('unitId is required');
-  const { error } = await supabase
-    .from('bridgethings_order_unit_details')
-    .update({
-      dashboard_username: username?.trim() || null,
-      dashboard_password: password || null,
-      updated_at:         new Date().toISOString(),
-    })
-    .eq('id', unitId);
+  // Go through the SECURITY DEFINER RPC: accountants (who activate the
+  // dashboard) have no direct write on bridgethings_order_unit_details, so a
+  // plain .update() silently saved nothing. The RPC updates just the two
+  // credential columns, gated to admin/accountant/employee.
+  const { error } = await supabase.rpc('bridgethings_set_dashboard_credentials', {
+    p_unit_id:  unitId,
+    p_username: username ?? null,
+    p_password: password ?? null,
+  });
   if (error) throw error;
 }
 
