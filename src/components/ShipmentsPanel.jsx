@@ -107,7 +107,25 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
                 {order.ship_to_gstin && <div className="text-xs text-muted" style={{marginTop:'0.2rem'}}>GSTIN: {order.ship_to_gstin}</div>}
               </>
             ) : (
-              <div className="text-sm text-muted" style={{fontStyle:'italic'}}>Same as Bill To</div>
+              // Not a drop-ship: the parcel goes to the partner's own
+              // address. Show it in full so dispatch sees the concrete
+              // destination here instead of having to read the Bill To box.
+              <>
+                <div className="font-semibold">{partner?.name || partner?.company_name || '—'}</div>
+                {partner?.address && <div className="text-sm text-muted">{partner.address}</div>}
+                {(partner?.city || partner?.state || partner?.pincode) && (
+                  <div className="text-sm text-muted">
+                    {[partner.city, partner.state, partner.pincode].filter(Boolean).join(', ')}
+                  </div>
+                )}
+                {partner?.phone && <div className="text-sm" style={{marginTop:'0.2rem'}}>📞 {partner.phone}</div>}
+                {!partner?.address && !partner?.city && (
+                  <div className="text-sm text-muted" style={{fontStyle:'italic'}}>
+                    Partner hasn't added an address yet
+                  </div>
+                )}
+                <div className="text-xs text-muted" style={{marginTop:'0.2rem', fontStyle:'italic'}}>Same as billing address</div>
+              </>
             )}
           </div>
         </div>
