@@ -7,8 +7,29 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
+import { notify, loadOrderParty } from './notify';
 
 const TABLE = 'bridgethings_unit_subscriptions';
+
+// Resolve everything a subscription mail needs from a unit id:
+// the parent order's partner (email/name) + the product name + serial.
+// unit → order_item (order_id, product) → order (partner).
+async function unitContext(unitId) {
+  if (!unitId) return {};
+  const { data } = await supabase
+    .from('bridgethings_order_unit_details')
+    .select('serial_number, item:bridgethings_order_items(order_id, product:bridgethings_products(name))')
+    .eq('id', unitId)
+    .maybeSingle();
+  const orderId = data?.item?.order_id || null;
+  const party = orderId ? await loadOrderParty(orderId) : null;
+  return {
+    orderId,
+    party,
+    productName: data?.item?.product?.name || '',
+    serial:      data?.serial_number || '',
+  };
+}
 
 // Add one year to YYYY-MM-DD. Used to compute end_date when admin enters start.
 export function addOneYear(isoDate) {
@@ -100,17 +121,41 @@ export async function createSubscription({
     .select()
     .single();
   if (error) throw error;
+
+  // Notify the partner their subscription is live (activation or renewal).
+  if (status === 'active') {
+    const ctx = await unitContext(unitId);
+    if (ctx.party?.partner?.email) {
+      notify('sub_activated',
+        { email: ctx.party.partner.email, role: 'partner', userId: ctx.party.partner.id },
+        { partnerName: ctx.party.partner.name, productName: ctx.productName, serial: ctx.serial },
+        { relatedOrderId: ctx.orderId });
+    }
+  }
   return data;
 }
 
 // Admin can cancel a subscription (mistake, refund, etc.). The row stays
 // for the audit trail; UI just stops counting it.
 export async function cancelSubscription(id) {
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from(TABLE)
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
-    .eq('id', id);
+    .eq('id', id)
+    .select('unit_id')
+    .maybeSingle();
   if (error) throw error;
+
+  // Let the partner know a subscription was cancelled.
+  if (data?.unit_id) {
+    const ctx = await unitContext(data.unit_id);
+    if (ctx.party?.partner?.email) {
+      notify('sub_cancelled',
+        { email: ctx.party.partner.email, role: 'partner', userId: ctx.party.partner.id },
+        { partnerName: ctx.party.partner.name, productName: ctx.productName, serial: ctx.serial },
+        { relatedOrderId: ctx.orderId });
+    }
+  }
 }
 
 // Partner-initiated: batch-insert pending subscription requests for a set
@@ -132,6 +177,12 @@ export async function requestSubscriptions(items) {
   }));
   const { data, error } = await supabase.from(TABLE).insert(rows).select();
   if (error) throw error;
+
+  // Notify accountants there are subscription requests to approve.
+  const ctx = await unitContext(items[0].unitId);
+  notify('sub_requested', { group: 'accountants' },
+    { partnerName: ctx.party?.partner?.name || 'A partner', deviceCount: String(items.length) },
+    { relatedOrderId: ctx.orderId });
   return data;
 }
 
@@ -177,5 +228,16 @@ export async function approveSubscription(subId, {
     .select()
     .single();
   if (error) throw error;
+
+  // Approved a pending request → notify the partner it's now active.
+  if (data?.unit_id) {
+    const ctx = await unitContext(data.unit_id);
+    if (ctx.party?.partner?.email) {
+      notify('sub_activated',
+        { email: ctx.party.partner.email, role: 'partner', userId: ctx.party.partner.id },
+        { partnerName: ctx.party.partner.name, productName: ctx.productName, serial: ctx.serial },
+        { relatedOrderId: ctx.orderId });
+    }
+  }
   return data;
 }

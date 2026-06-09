@@ -6,6 +6,38 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
 import { computeOrderTotal } from './tax';
+import { notify, loadOrderParty, orderShortId, fmtDate } from './notify';
+
+// Re-read an order's dispatch_approval after a mutation that may have
+// flipped it (directly or via the payment trigger). Used to decide
+// whether to fire the "cleared for production" notifications.
+async function fetchDispatchApproval(orderId) {
+  const { data } = await supabase
+    .from('bridgethings_orders')
+    .select('dispatch_approval')
+    .eq('id', orderId)
+    .maybeSingle();
+  return data?.dispatch_approval || null;
+}
+
+// Fire the two "order cleared for dispatch" notifications: the partner
+// ("production starting") and the operations team ("ready to produce").
+// Exported so payments.js can reuse it after a payment completes the
+// balance and the DB trigger auto-approves dispatch.
+export async function notifyDispatchCleared(orderId) {
+  const party = await loadOrderParty(orderId);
+  const sid = orderShortId(orderId);
+  const name = party?.partner?.name || 'there';
+  if (party?.partner?.email) {
+    notify('dispatch_approved',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: sid, partnerName: name },
+      { relatedOrderId: orderId });
+  }
+  notify('production_ready', { group: 'operations' },
+    { orderShortId: sid, partnerName: name },
+    { relatedOrderId: orderId });
+}
 
 // Embedded relational select: pulls each order with its items array AND each
 // item's product info in a single round-trip.
@@ -125,6 +157,12 @@ export async function createOrder({
     throw itemsErr;
   }
 
+  // Notify admins a new PO landed in their review queue.
+  const party = await loadOrderParty(order.id);
+  notify('po_submitted', { group: 'admins' },
+    { orderShortId: orderShortId(order.id), partnerName: party?.partner?.name || 'A partner' },
+    { relatedOrderId: order.id });
+
   return { ...order, items: insertedItems };
 }
 
@@ -158,6 +196,16 @@ export async function confirmOrder(orderId, employeeNotes) {
     })
     .eq('id', orderId);
   if (orderErr) throw orderErr;
+
+  // Notify the partner their PO is confirmed (with the committed date).
+  const party = await loadOrderParty(orderId);
+  if (party?.partner?.email) {
+    notify('po_confirmed',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name,
+        committedDate: fmtDate(committed), notes: employeeNotes?.trim() || '' },
+      { relatedOrderId: orderId });
+  }
 }
 
 /**
@@ -181,6 +229,16 @@ export async function proposeDeliveryDate(orderId, date, note) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify the partner of the counter-proposed delivery date.
+  const party = await loadOrderParty(orderId);
+  if (party?.partner?.email) {
+    notify('delivery_counter',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name,
+        proposedDate: fmtDate(date), notes: note.trim() },
+      { relatedOrderId: orderId });
+  }
 }
 
 /**
@@ -210,6 +268,12 @@ export async function acceptDeliveryCounter(orderId) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify admins the partner accepted — the order is now active.
+  const party = await loadOrderParty(orderId);
+  notify('counter_accepted', { group: 'admins' },
+    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner' },
+    { relatedOrderId: orderId });
 }
 
 /**
@@ -227,6 +291,12 @@ export async function declineDeliveryCounter(orderId) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify admins the partner declined — the order was rejected.
+  const party = await loadOrderParty(orderId);
+  notify('counter_declined', { group: 'admins' },
+    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'The partner' },
+    { relatedOrderId: orderId });
 }
 
 /**
@@ -244,6 +314,15 @@ export async function rejectOrder(orderId, notes) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify the partner their PO was rejected (with the reason, if given).
+  const party = await loadOrderParty(orderId);
+  if (party?.partner?.email) {
+    notify('po_rejected',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name, notes: notes?.trim() || '' },
+      { relatedOrderId: orderId });
+  }
 }
 
 /**
@@ -614,6 +693,9 @@ export async function approveDispatch(orderId) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify partner ("production starting") + operations ("ready to produce").
+  await notifyDispatchCleared(orderId);
 }
 
 /**
@@ -633,4 +715,13 @@ export async function rejectDispatch(orderId, note) {
     })
     .eq('id', orderId);
   if (error) throw error;
+
+  // Notify the partner the order is on hold pending more payment.
+  const party = await loadOrderParty(orderId);
+  if (party?.partner?.email) {
+    notify('dispatch_rejected',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name, notes: note.trim() },
+      { relatedOrderId: orderId });
+  }
 }

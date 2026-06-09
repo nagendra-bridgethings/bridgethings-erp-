@@ -9,6 +9,7 @@
 // (order_id, doc_type) with re-uploads overwriting via upsert.
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
+import { notify, loadOrderParty, orderShortId } from './notify';
 
 const TABLE       = 'bridgethings_order_partner_documents';
 const DOCS_BUCKET = 'bridgethings-partner-shipping-docs';
@@ -121,6 +122,12 @@ export function useShipmentDocs(shipmentId) {
 export async function requestShipmentDocs(shipmentId, docTypes) {
   if (!shipmentId)        throw new Error('shipmentId is required');
   if (!docTypes?.length)  throw new Error('Pick at least one document type to request');
+  const { data: ship } = await supabase
+    .from('bridgethings_shipments')
+    .select('order_id')
+    .eq('id', shipmentId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from('bridgethings_shipments')
     .update({
@@ -129,6 +136,18 @@ export async function requestShipmentDocs(shipmentId, docTypes) {
     })
     .eq('id', shipmentId);
   if (error) throw error;
+
+  // Notify the partner which documents to upload for this parcel.
+  if (ship?.order_id) {
+    const party = await loadOrderParty(ship.order_id);
+    if (party?.partner?.email) {
+      const docList = docTypes.map(t => DOC_LABELS[t] || t).join(', ');
+      notify('docs_requested',
+        { email: party.partner.email, role: 'partner', userId: party.partner.id },
+        { orderShortId: orderShortId(ship.order_id), partnerName: party.partner.name, docList },
+        { relatedOrderId: ship.order_id, relatedShipmentId: shipmentId });
+    }
+  }
 }
 
 // Partner uploads one document for a specific shipment. After the
@@ -182,6 +201,11 @@ export async function uploadShipmentDoc({
             .from('bridgethings_shipments')
             .update({ partner_docs_status: 'submitted' })
             .eq('id', shipmentId);
+          // All requested docs are in — tell dispatch the parcel can ship.
+          const party = await loadOrderParty(orderId);
+          notify('docs_submitted', { group: 'dispatch' },
+            { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'A partner' },
+            { relatedOrderId: orderId, relatedShipmentId: shipmentId });
         } catch (e) {
           console.error('[partnerDocs] mark shipment submitted failed:', e);
         }

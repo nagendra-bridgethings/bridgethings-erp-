@@ -11,9 +11,27 @@
 // delete — the order rolls itself up.
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
+import { notify, loadOrderParty, orderShortId } from './notify';
 
 const SHIPMENTS_TABLE = 'bridgethings_shipments';
 const ITEMS_TABLE     = 'bridgethings_shipment_items';
+
+// Tell the partner a parcel is on its way. Fired the moment a shipment
+// first gets a tracking number — either at creation (if created with one)
+// or later via updateShipment when dispatch fills the AWB on a "plan"
+// shipment. Gated on tracking-appears so plan-first parcels don't email
+// "shipped" before they actually move.
+async function notifyShipmentShipped(orderId, courier, tracking, shipmentId) {
+  if (!orderId) return;
+  const party = await loadOrderParty(orderId);
+  if (party?.partner?.email) {
+    notify('shipment_dispatched',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name,
+        courier: courier?.trim() || '', tracking: tracking?.trim() || '' },
+      { relatedOrderId: orderId, relatedShipmentId: shipmentId });
+  }
+}
 
 // Load every shipment for an order, with its embedded items. Newest first.
 export function useShipmentsForOrder(orderId) {
@@ -110,6 +128,13 @@ export async function createShipment({
     await supabase.from(SHIPMENTS_TABLE).delete().eq('id', shipment.id);
     throw itemsErr;
   }
+
+  // If this shipment was created WITH a tracking number it's a real
+  // dispatch (not a plan) — tell the partner now. Plan-first parcels
+  // notify later from updateShipment when the AWB is added.
+  if ((trackingNumber || '').trim()) {
+    await notifyShipmentShipped(orderId, courier, trackingNumber, shipment.id);
+  }
   return shipment;
 }
 
@@ -118,11 +143,28 @@ export async function createShipment({
 // in.
 export async function markShipmentDelivered(shipmentId, deliveredDate) {
   if (!shipmentId) throw new Error('shipmentId is required');
+  const { data: before } = await supabase
+    .from(SHIPMENTS_TABLE)
+    .select('order_id, delivered_date')
+    .eq('id', shipmentId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from(SHIPMENTS_TABLE)
     .update({ delivered_date: deliveredDate || new Date().toISOString().slice(0, 10) })
     .eq('id', shipmentId);
   if (error) throw error;
+
+  // Notify the partner on the first delivery mark (skip re-marks).
+  if (before?.order_id && !before?.delivered_date) {
+    const party = await loadOrderParty(before.order_id);
+    if (party?.partner?.email) {
+      notify('shipment_delivered',
+        { email: party.partner.email, role: 'partner', userId: party.partner.id },
+        { orderShortId: orderShortId(before.order_id), partnerName: party.partner.name },
+        { relatedOrderId: before.order_id, relatedShipmentId: shipmentId });
+    }
+  }
 }
 
 // Patch shipment fields after creation — used when dispatch creates the
@@ -138,11 +180,32 @@ export async function updateShipment(shipmentId, patch) {
   if ('shippedDate'     in patch) clean.shipped_date    = patch.shippedDate            || null;
   if ('notes'           in patch) clean.notes           = patch.notes?.trim()          || null;
   if (Object.keys(clean).length === 0) return;
+
+  // Snapshot before so we can detect a tracking number appearing for the
+  // first time (plan → dispatched) and notify the partner exactly once.
+  const { data: before } = await supabase
+    .from(SHIPMENTS_TABLE)
+    .select('order_id, tracking_number, courier')
+    .eq('id', shipmentId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from(SHIPMENTS_TABLE)
     .update(clean)
     .eq('id', shipmentId);
   if (error) throw error;
+
+  const trackingAppeared =
+    !(before?.tracking_number || '').trim() &&
+    !!(clean.tracking_number || '').trim();
+  if (trackingAppeared) {
+    await notifyShipmentShipped(
+      before?.order_id,
+      clean.courier ?? before?.courier,
+      clean.tracking_number,
+      shipmentId,
+    );
+  }
 }
 
 // Drop a shipment (and its items via ON DELETE CASCADE). Trigger

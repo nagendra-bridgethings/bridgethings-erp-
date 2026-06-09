@@ -9,8 +9,23 @@
 // is delivered, e.g. for warranty / installation records.
 
 import { supabase } from './supabase';
+import { notify, loadOrderParty, orderShortId } from './notify';
 
 const TABLE = 'bridgethings_order_unit_details';
+
+// Resolve the distinct parent order ids for a set of unit ids
+// (unit → order_item → order). Lets the production/dispatch handoff
+// mails reference the right ORD- numbers even though callers pass units.
+async function ordersForUnits(unitIds) {
+  if (!unitIds?.length) return [];
+  const { data: units } = await supabase
+    .from(TABLE).select('order_item_id').in('id', unitIds);
+  const itemIds = [...new Set((units || []).map(u => u.order_item_id).filter(Boolean))];
+  if (!itemIds.length) return [];
+  const { data: items } = await supabase
+    .from('bridgethings_order_items').select('order_id').in('id', itemIds);
+  return [...new Set((items || []).map(i => i.order_id).filter(Boolean))];
+}
 
 // Load all unit details for the given order item ids. Returns a map keyed
 // by order_item_id so callers can render units grouped by item.
@@ -56,6 +71,17 @@ export async function setUnitsProductionStatus(unitIds, status) {
     .update(patch)
     .in('id', unitIds);
   if (error) throw error;
+
+  // Ops handed units to dispatch — notify the dispatch team to verify/ship.
+  if (status === 'ready_to_dispatch') {
+    const orderIds = await ordersForUnits(unitIds);
+    for (const oid of orderIds) {
+      const party = await loadOrderParty(oid);
+      notify('units_ready_dispatch', { group: 'dispatch' },
+        { orderShortId: orderShortId(oid), partnerName: party?.partner?.name || 'a partner' },
+        { relatedOrderId: oid });
+    }
+  }
 }
 
 // Bulk: dispatch flips units back to 'sent_back' with a note.
@@ -71,6 +97,15 @@ export async function sendUnitsBackToOps(unitIds, note) {
     })
     .in('id', unitIds);
   if (error) throw error;
+
+  // Dispatch bounced units back — notify operations with the reason.
+  const orderIds = await ordersForUnits(unitIds);
+  for (const oid of orderIds) {
+    const party = await loadOrderParty(oid);
+    notify('units_sent_back', { group: 'operations' },
+      { orderShortId: orderShortId(oid), partnerName: party?.partner?.name || 'a partner', notes: note.trim() },
+      { relatedOrderId: oid });
+  }
 }
 
 // Upsert a unit's details. Keyed by (order_item_id, unit_index) which is

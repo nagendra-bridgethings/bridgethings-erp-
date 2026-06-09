@@ -6,9 +6,51 @@
 // payment rows — the order totals update automatically.
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
+import { notify, loadOrderParty, orderShortId, fmtAmount } from './notify';
+import { notifyDispatchCleared } from './orders';
 
 const TABLE = 'bridgethings_order_payments';
 const SLIP_BUCKET = 'bridgethings-payment-slips';
+
+// Read just an order's current dispatch_approval — used to detect the
+// moment a payment completes the balance and the recompute trigger flips
+// it to 'approved' (so we only fire the "cleared" mails on that transition).
+async function readDispatchApproval(orderId) {
+  if (!orderId) return null;
+  const { data } = await supabase
+    .from('bridgethings_orders')
+    .select('dispatch_approval')
+    .eq('id', orderId)
+    .maybeSingle();
+  return data?.dispatch_approval || null;
+}
+
+// Shared post-payment notifications. Fires "payment received" to the
+// partner, and — only if THIS payment is what tipped the order into
+// fully-paid (beforeApproval !== 'approved' && now === 'approved') —
+// the "cleared for production" pair to partner + operations.
+async function afterPaymentApplied(orderId, beforeApproval, amountApplied) {
+  if (!orderId) return;
+  const party = await loadOrderParty(orderId);
+  const { data: ord } = await supabase
+    .from('bridgethings_orders')
+    .select('total_amount, amount_paid, dispatch_approval')
+    .eq('id', orderId)
+    .maybeSingle();
+  const balance = Math.max(0, Number(ord?.total_amount || 0) - Number(ord?.amount_paid || 0));
+
+  if (party?.partner?.email) {
+    notify('payment_verified',
+      { email: party.partner.email, role: 'partner', userId: party.partner.id },
+      { orderShortId: orderShortId(orderId), partnerName: party.partner.name,
+        amount: fmtAmount(amountApplied), balance: fmtAmount(balance) },
+      { relatedOrderId: orderId });
+  }
+
+  if (beforeApproval !== 'approved' && ord?.dispatch_approval === 'approved') {
+    await notifyDispatchCleared(orderId);
+  }
+}
 
 // Human-readable labels for the payment_method enum.
 export const PAYMENT_METHODS = [
@@ -61,6 +103,11 @@ export async function addPayment({
   if (!amount || Number(amount) <= 0)    throw new Error('Amount must be greater than zero');
   if (!paymentDate)                      throw new Error('Payment date is required');
 
+  // Snapshot dispatch state before the insert — staff-entered payments
+  // default to status='verified', so the recompute trigger may flip the
+  // order to fully-paid/approved on insert.
+  const beforeApproval = await readDispatchApproval(orderId);
+
   const { data, error } = await supabase
     .from(TABLE)
     .insert({
@@ -74,6 +121,10 @@ export async function addPayment({
     .select()
     .single();
   if (error) throw error;
+
+  // Staff recorded a payment directly → notify the partner it's received,
+  // and fire the production-cleared mails if this completed the balance.
+  await afterPaymentApplied(orderId, beforeApproval, Number(amount));
   return data;
 }
 
@@ -126,6 +177,13 @@ export async function submitPaymentProof({
     .select()
     .single();
   if (error) throw error;
+
+  // Notify accountants there's a payment proof awaiting verification.
+  const party = await loadOrderParty(orderId);
+  notify('payment_submitted', { group: 'accountants' },
+    { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'A partner',
+      amount: fmtAmount(amount) },
+    { relatedOrderId: orderId });
   return data;
 }
 
@@ -152,6 +210,17 @@ export async function getPaymentSlipUrl(path) {
 export async function verifyPayment(paymentId, adjustedAmount) {
   if (!paymentId) throw new Error('paymentId is required');
   const { data: { user } } = await supabase.auth.getUser();
+
+  // Read the payment (order, amount, current status) so we can address the
+  // partner mail and detect the pending → verified transition.
+  const { data: pay } = await supabase
+    .from(TABLE)
+    .select('order_id, amount, status')
+    .eq('id', paymentId)
+    .maybeSingle();
+  const alreadyVerified = pay?.status === 'verified';
+  const beforeApproval = await readDispatchApproval(pay?.order_id);
+
   const patch = {
     status:      'verified',
     verified_by: user?.id || null,
@@ -165,6 +234,12 @@ export async function verifyPayment(paymentId, adjustedAmount) {
     .update(patch)
     .eq('id', paymentId);
   if (error) throw error;
+
+  // Only notify on a real transition into verified (not a re-verify no-op).
+  if (!alreadyVerified && pay?.order_id) {
+    const applied = patch.amount !== undefined ? patch.amount : Number(pay.amount || 0);
+    await afterPaymentApplied(pay.order_id, beforeApproval, applied);
+  }
 }
 
 // Accountant rejects a partner-submitted payment (e.g. wrong slip,
@@ -172,6 +247,12 @@ export async function verifyPayment(paymentId, adjustedAmount) {
 export async function rejectPayment(paymentId, note) {
   if (!paymentId)     throw new Error('paymentId is required');
   if (!note?.trim())  throw new Error('Please add a note explaining the rejection');
+  const { data: pay } = await supabase
+    .from(TABLE)
+    .select('order_id')
+    .eq('id', paymentId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from(TABLE)
     .update({
@@ -180,4 +261,15 @@ export async function rejectPayment(paymentId, note) {
     })
     .eq('id', paymentId);
   if (error) throw error;
+
+  // Notify the partner so they can re-upload a correct slip.
+  if (pay?.order_id) {
+    const party = await loadOrderParty(pay.order_id);
+    if (party?.partner?.email) {
+      notify('payment_rejected',
+        { email: party.partner.email, role: 'partner', userId: party.partner.id },
+        { orderShortId: orderShortId(pay.order_id), partnerName: party.partner.name, notes: note.trim() },
+        { relatedOrderId: pay.order_id });
+    }
+  }
 }
