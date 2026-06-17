@@ -5,7 +5,7 @@
 // for pending POs).
 import { useMemo, useState } from 'react';
 import { usePartners } from '../../lib/partners';
-import { useOrders } from '../../lib/orders';
+import { useOrders, orderRef } from '../../lib/orders';
 import POReviewModal from '../../components/POReviewModal';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -54,7 +54,7 @@ export default function POReceived() {
     if (!term) return base;
     return base.filter(o => {
       const partner = getPartner(o.partner_id);
-      const hay = [shortId(o.id), o.id, partner?.name, partner?.company_name, partner?.email]
+      const hay = [orderRef(o), shortId(o.id), o.id, o.partner_po_number, partner?.name, partner?.company_name, partner?.email]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
@@ -107,7 +107,7 @@ export default function POReceived() {
                   <th>Order ID</th>
                   <th>Channel Partner</th>
                   <th>Date</th>
-                  <th>Requested Delivery</th>
+                  <th>Requested Dispatch</th>
                   <th>Items</th>
                   <th style={{textAlign:'right'}}>Amount</th>
                   <th>Status</th>
@@ -135,7 +135,7 @@ export default function POReceived() {
                       title="Click to view PO details"
                     >
                       <td>
-                        <span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(order.id)}</span>
+                        <span className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(order)}</span>
                       </td>
                       <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
                       <td className="text-sm">{fmtDate(order.created_at)}</td>

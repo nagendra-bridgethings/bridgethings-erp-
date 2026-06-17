@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
 import { useAuth } from '../../lib/auth';
-import { useOrders } from '../../lib/orders';
+import { useOrders, orderRef } from '../../lib/orders';
 import { supabase } from '../../lib/supabase';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -150,7 +150,7 @@ export default function Invoices() {
   // ────────────────────────────────────────────────────────────────────
   const term = search.trim().toLowerCase();
   const filtered = !term ? invoiceableOrders : invoiceableOrders.filter(o => {
-    const hay = [shortId(o.id), o.id, o.delivery_method, o.tracking_number]
+    const hay = [orderRef(o), shortId(o.id), o.id, o.partner_po_number, o.delivery_method, o.tracking_number]
       .filter(Boolean).join(' ').toLowerCase();
     return hay.includes(term);
   });
@@ -206,7 +206,7 @@ export default function Invoices() {
                     >
                       <td>
                         <span className="font-semibold" style={{color:'var(--primary)', textDecoration:'underline'}}>
-                          ORD-{shortId(o.id)}
+                          {orderRef(o)}
                         </span>
                       </td>
                       <td>{fmtDate(o.created_at)}</td>
@@ -250,7 +250,7 @@ function OrderShipmentsList({ order, shipments, productsById = {}, onBack, onPic
           <button className="btn btn-ghost btn-sm" onClick={onBack} style={{marginBottom:'0.5rem'}}>
             ← Back to invoices
           </button>
-          <div className="page-title">Invoices for ORD-{shortId(order.id)}</div>
+          <div className="page-title">Invoices for {orderRef(order)}</div>
           <div className="page-subtitle">
             {shipments.length} {shipments.length === 1 ? 'shipment' : 'shipments'} dispatched · Order total {fmtINR(order.total_amount)}
           </div>
@@ -474,7 +474,7 @@ function InvoiceDetail({
             Invoice # {invNo}
           </h2>
           <div className="text-sm text-muted" style={{marginTop:'0.25rem'}}>
-            Order ORD-{shortId(order.id)} · Shipment {shipmentIndex + 1}
+            Order {orderRef(order)} · Shipment {shipmentIndex + 1}
           </div>
         </div>
 

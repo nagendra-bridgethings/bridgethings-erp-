@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { usePartners } from '../../lib/partners';
 import {
-  useOrders, updateFulfillment,
+  useOrders, updateFulfillment, orderRef,
   ITEM_PRODUCTION_STATUSES, ITEM_PRODUCTION_LABEL,
   deriveOpsOrderStatus, OPS_STATUS_BADGE,
 } from '../../lib/orders';
@@ -202,7 +202,7 @@ export default function Fulfillment() {
     return byStatus.filter(o => {
       const partner = getPartner(o.partner_id);
       const hay = [
-        shortId(o.id), o.id, o.tracking_number, o.delivery_method,
+        orderRef(o), shortId(o.id), o.id, o.partner_po_number, o.tracking_number, o.delivery_method,
         partner?.name, partner?.company_name,
       ].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
@@ -319,7 +319,7 @@ export default function Fulfillment() {
       }
 
       await reload();
-      addToast(`Order ORD-${shortId(selected.id)} updated successfully`, 'success');
+      addToast(`Order ${orderRef(selected)} updated successfully`, 'success');
       setSelected(null);
     } catch (err) {
       console.error('[Fulfillment] save failed:', err);
@@ -428,7 +428,7 @@ export default function Fulfillment() {
                       title={isLocked ? 'Order delivered — opens read-only' : 'Click to update tracking & unit details'}
                     >
                       <td>
-                        <span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(order.id)}</span>
+                        <span className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(order)}</span>
                       </td>
                       <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
                       <td className="text-sm">{(order.items || []).length}</td>
@@ -553,8 +553,8 @@ export default function Fulfillment() {
             <div className="modal-header">
               <h3>
                 {(selected.fulfillment_status === 'delivered' || selected.status === 'completed')
-                  ? `View Order: ORD-${shortId(selected.id)}`
-                  : `Update Order: ORD-${shortId(selected.id)}`}
+                  ? `View Order: ${orderRef(selected)}`
+                  : `Update Order: ${orderRef(selected)}`}
               </h3>
               <button className="modal-close" onClick={() => setSelected(null)}>✕</button>
             </div>
@@ -865,7 +865,7 @@ function UnitsTab({ team, items, units, onUpdateUnit, onChanged, view = 'active'
               </button>
             </>
           ) : (
-            <button className="btn btn-warning btn-sm" disabled={picked.size === 0 || bulkBusy} onClick={() => setSendBackOpen(true)}>
+            <button className="btn btn-primary btn-sm" disabled={picked.size === 0 || bulkBusy} onClick={() => setSendBackOpen(true)}>
               Send Back to Operations
             </button>
           )}

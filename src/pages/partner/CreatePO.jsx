@@ -5,7 +5,7 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { useCart } from '../../lib/cart';
-import { createOrder, useOrders } from '../../lib/orders';
+import { createOrder, useOrders, orderRef } from '../../lib/orders';
 import { COURIERS } from '../../lib/couriers';
 import { computeOrderTotal, IGST_LABEL } from '../../lib/tax';
 import { useToast } from '../../lib/toast';
@@ -31,11 +31,17 @@ export default function CreatePO() {
   const { items, total, updateField, removeAt, clear } = useCart();
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // PO-number popup: shown when the partner clicks Submit. They can enter
+  // their own reference (e.g. "CUSSJKFKJ") or skip it.
+  const [showPoModal, setShowPoModal] = useState(false);
+  const [poNumber, setPoNumber] = useState('');
+  const [lastPoNumber, setLastPoNumber] = useState(''); // shown on success screen
   // Order shown in the items-preview modal triggered from the recent-orders table.
   const [viewOrder, setViewOrder] = useState(null);
   // Courier id selected by the partner. Defaults to the cheapest option so
   // the order total is meaningful even before they pick.
-  const [courierId, setCourierId] = useState(COURIERS[0]?.id || '');
+  // No courier pre-selected — the partner must explicitly pick one.
+  const [courierId, setCourierId] = useState('');
   const selectedCourier = COURIERS.find(c => c.id === courierId) || null;
   const shippingCost = selectedCourier ? Number(selectedCourier.price) || 0 : 0;
   // Optional — partner can suggest a preferred delivery date. Admin reviews
@@ -85,16 +91,28 @@ export default function CreatePO() {
     const term  = poSearch.trim().toLowerCase();
     if (!term) return byTab;
     return byTab.filter(o => {
-      const hay = [shortId(o.id), o.id, o.status, o.payment_status, o.delivery_method, o.tracking_number]
+      const hay = [orderRef(o), shortId(o.id), o.id, o.partner_po_number, o.status, o.payment_status, o.delivery_method, o.tracking_number]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
   })();
   const displayedOrders = showAllPOs ? filteredOrders : filteredOrders.slice(0, 5);
 
-  const handleSubmit = async () => {
+  // Step 1: clicking "Submit Purchase Order" validates then opens the
+  // PO-number popup (instead of submitting straight away).
+  const openSubmit = () => {
     if (items.length === 0) { addToast('Add at least one product to the PO', 'error'); return; }
+    if (!selectedCourier) { addToast('Please select a delivery partner', 'error'); return; }
     if (!user?.supabaseId) { addToast('Cannot submit: not signed in', 'error'); return; }
+    setPoNumber('');
+    setShowPoModal(true);
+  };
+
+  // Step 2: actually create the order, attaching the (optional) PO number.
+  // `poValue` lets "Skip" submit blank regardless of what's typed.
+  const handleSubmit = async (poValue = poNumber) => {
+    if (!user?.supabaseId) { addToast('Cannot submit: not signed in', 'error'); return; }
+    const po = (poValue ?? '').trim();
 
     setSubmitting(true);
     try {
@@ -110,9 +128,12 @@ export default function CreatePO() {
         deliveryMethod:        selectedCourier?.name || null,
         shippingCost:          shippingCost,
         requestedDeliveryDate: requestedDeliveryDate || null,
+        partnerPoNumber:       po || null,
       });
+      setLastPoNumber(po);
       clear();
       setRequestedDeliveryDate('');
+      setShowPoModal(false);
       setSubmitted(true);
       addToast('Purchase Order submitted successfully! Awaiting Bridge Things confirmation.', 'success');
     } catch (err) {
@@ -126,13 +147,43 @@ export default function CreatePO() {
   if (submitted) return (
     <div style={{maxWidth:'520px', margin:'4rem auto', textAlign:'center'}}>
       <h2 style={{marginBottom:'0.5rem'}}>PO Submitted Successfully!</h2>
-      <p style={{color:'var(--text-muted)', marginBottom:'1.5rem'}}>Your purchase order has been sent to Bridge Things for review. You'll be notified once they confirm the delivery dates.</p>
+      {lastPoNumber && (
+        <p style={{marginBottom:'0.75rem', fontSize:'0.95rem'}}>
+          Your PO number: <span style={{fontWeight:700, color:'var(--primary)'}}>{lastPoNumber}</span>
+        </p>
+      )}
+      <p style={{color:'var(--text-muted)', marginBottom:'1.5rem'}}>Your purchase order has been sent to Bridge Things for review. You'll be notified once they confirm the dispatch dates.</p>
       <button className="btn btn-primary" onClick={() => { setSubmitted(false); navigate('/partner/catalog'); }}>Create Another PO</button>
     </div>
   );
 
   return (
     <>
+      <style>{`
+        .po-section { padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+        .po-section-title {
+          font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;
+          text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.85rem;
+        }
+        .po-courier { transition: all 0.15s ease; }
+        .po-courier:hover { border-color: var(--primary) !important; box-shadow: var(--shadow-sm); }
+        .po-date {
+          max-width: 280px; width: 100%; cursor: pointer; font-variant-numeric: tabular-nums;
+        }
+        .po-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.55; padding: 2px; }
+        .po-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
+        .po-date:invalid::-webkit-datetime-edit { color: var(--text-muted); }
+        .po-summary {
+          width: 100%; max-width: 380px; background: var(--card);
+          border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 1.25rem; box-shadow: var(--shadow-sm);
+        }
+        .po-summary-row { display: flex; justify-content: space-between; gap: 1.5rem; font-size: 0.85rem; }
+        .po-submit { width: 100%; justify-content: center; padding: 0.8rem 1.5rem !important; font-size: 0.95rem !important; font-weight: 600; margin-top: 1.1rem; }
+        .po-clear { color: var(--danger) !important; border: 1px solid var(--border) !important; background: var(--card) !important; }
+        .po-clear:hover { background: var(--danger-bg) !important; border-color: var(--danger) !important; }
+      `}</style>
+
       <div className="page-header">
         <div>
           <div className="page-title">Purchase Orders</div>
@@ -140,8 +191,7 @@ export default function CreatePO() {
         </div>
         {items.length > 0 && (
           <button
-            className="btn btn-ghost btn-sm"
-            style={{ color: 'var(--danger)' }}
+            className="btn btn-sm po-clear"
             onClick={() => {
               if (window.confirm('Clear all items from this PO?')) clear();
             }}
@@ -172,16 +222,18 @@ export default function CreatePO() {
                   </div>
                   <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)'}} onClick={() => removeAt(idx)}>Remove</button>
                 </div>
-                <div className="form-grid form-grid-2">
-                  <div className="form-group">
+                <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+                  <div className="form-group" style={{flex:'0 0 140px'}}>
                     <label className="form-label">Quantity</label>
                     <input type="number" min="1" className="form-input" value={item.qty}
-                      onChange={e => updateField(idx, 'qty', Math.max(1, parseInt(e.target.value)||1))} />
+                      onChange={e => updateField(idx, 'qty', Math.max(1, parseInt(e.target.value)||1))}
+                      style={{width:'100%'}} />
                   </div>
-                  <div className="form-group">
+                  <div className="form-group" style={{flex:'1 1 280px'}}>
                     <label className="form-label">Notes / Customization</label>
                     <input className="form-input" value={item.notes} placeholder="Optional notes..."
-                      onChange={e => updateField(idx, 'notes', e.target.value)} />
+                      onChange={e => updateField(idx, 'notes', e.target.value)}
+                      style={{width:'100%'}} />
                   </div>
                 </div>
                 <div style={{textAlign:'right', fontWeight:600, color:'var(--primary)', marginTop:'0.5rem'}}>
@@ -192,93 +244,77 @@ export default function CreatePO() {
             })}
           </div>
 
-          {/* Courier selection */}
-          <div style={{padding:'1.25rem 1.5rem', borderTop:'1px solid var(--border)'}}>
-            <div style={{fontSize:'0.95rem', fontWeight:600, marginBottom:'0.75rem'}}>Delivery Partner</div>
-            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(220px, 1fr))', gap:'0.6rem'}}>
-              {COURIERS.map(c => {
-                const isSelected = c.id === courierId;
-                return (
-                  <label
-                    key={c.id}
-                    style={{
-                      display:'flex',
-                      alignItems:'center',
-                      justifyContent:'space-between',
-                      gap:'0.5rem',
-                      padding:'0.7rem 0.9rem',
-                      border: `1.5px solid ${isSelected ? 'var(--primary)' : 'var(--border)'}`,
-                      borderRadius:'8px',
-                      cursor:'pointer',
-                      background: isSelected ? '#eff6ff' : 'var(--card)',
-                      transition:'all 0.15s',
-                    }}
-                  >
-                    <div style={{display:'flex', alignItems:'center', gap:'0.5rem'}}>
-                      <input
-                        type="radio"
-                        name="courier"
-                        value={c.id}
-                        checked={isSelected}
-                        onChange={() => setCourierId(c.id)}
-                      />
-                      <span style={{fontWeight:600, fontSize:'0.875rem'}}>{c.name}</span>
-                    </div>
-                    <span style={{fontWeight:600, fontSize:'0.875rem', color:'var(--primary)'}}>
-                      {fmtINR(c.price)}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Requested delivery date — optional. Admin reviews and either
-              accepts or counter-proposes. */}
-          <div style={{padding:'1.25rem 1.5rem', borderTop:'1px solid var(--border)'}}>
-            <div style={{fontSize:'0.95rem', fontWeight:600, marginBottom:'0.5rem'}}>Requested Delivery Date</div>
-            <div style={{fontSize:'0.8rem', color:'var(--text-muted)', marginBottom:'0.5rem'}}>
-              When would you like to receive this order? Bridge Things will confirm or propose an alternative.
-            </div>
-            <input
-              type="date"
-              className="form-input"
-              value={requestedDeliveryDate}
-              min={new Date().toISOString().slice(0, 10)}
-              onChange={e => setRequestedDeliveryDate(e.target.value)}
-              style={{maxWidth:'260px'}}
-            />
-          </div>
-
-          {/* Summary */}
-          <div style={{padding:'1.25rem 1.5rem', background:'var(--bg)', borderTop:'1px solid var(--border)', display:'flex', alignItems:'center', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap'}}>
-            <div style={{display:'flex', flexDirection:'column', gap:'0.25rem'}}>
-              <div style={{display:'flex', justifyContent:'space-between', gap:'1.5rem', fontSize:'0.85rem', color:'var(--text-muted)'}}>
-                <span>Items subtotal</span>
-                <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(total)}</span>
-              </div>
-              {discountPct > 0 && (
-                <div style={{display:'flex', justifyContent:'space-between', gap:'1.5rem', fontSize:'0.85rem', color:'var(--success)'}}>
-                  <span>Discount ({discountPct}% off)</span>
-                  <span style={{fontWeight:600}}>− {fmtINR(discountSaved)}</span>
+          {/* Requested dispatch date (left) + delivery partner dropdown (right) */}
+          <div className="po-section">
+            <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'1.5rem', alignItems:'start'}}>
+              <div>
+                <div className="po-section-title">
+                  Requested Dispatch Date
+                  <span style={{textTransform:'none', letterSpacing:'normal', fontWeight:400}}> · optional</span>
                 </div>
-              )}
-              <div style={{display:'flex', justifyContent:'space-between', gap:'1.5rem', fontSize:'0.85rem', color:'var(--text-muted)'}}>
-                <span>Shipping ({selectedCourier?.name || '—'})</span>
-                <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(shippingCost)}</span>
+                <input
+                  type="date"
+                  className="form-input po-date"
+                  value={requestedDeliveryDate}
+                  min={new Date().toISOString().slice(0, 10)}
+                  onChange={e => setRequestedDeliveryDate(e.target.value)}
+                  style={{maxWidth:'100%'}}
+                />
+                <div style={{fontSize:'0.78rem', color:'var(--text-muted)', marginTop:'0.5rem'}}>
+                  Bridge Things will confirm this date or propose an alternative.
+                </div>
               </div>
-              <div style={{display:'flex', justifyContent:'space-between', gap:'1.5rem', fontSize:'0.85rem', color:'var(--text-muted)'}}>
-                <span>{IGST_LABEL}</span>
-                <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(orderTotals.tax)}</span>
-              </div>
-              <div style={{display:'flex', justifyContent:'space-between', gap:'1.5rem', fontSize:'1rem', borderTop:'1px solid var(--border)', paddingTop:'0.4rem', marginTop:'0.25rem'}}>
-                <span style={{fontWeight:700}}>Order Total</span>
-                <span style={{fontSize:'1.4rem', fontWeight:700, color:'var(--primary)'}}>{fmtINR(grandTotal)}</span>
+              <div>
+                <div className="po-section-title">Delivery Partner</div>
+                <select
+                  className="form-select"
+                  value={courierId}
+                  onChange={e => setCourierId(e.target.value)}
+                  style={{width:'100%'}}
+                >
+                  <option value="">Select delivery partner</option>
+                  {COURIERS.map(c => (
+                    <option key={c.id} value={c.id}>{c.name} — {fmtINR(c.price)}</option>
+                  ))}
+                </select>
+                <div style={{fontSize:'0.78rem', color:'var(--text-muted)', marginTop:'0.5rem'}}>
+                  {selectedCourier ? `Shipping charge: ${fmtINR(shippingCost)}` : 'Choose a courier to add shipping.'}
+                </div>
               </div>
             </div>
-            <button className="btn btn-primary" style={{padding:'0.7rem 2rem', fontSize:'0.95rem'}} onClick={handleSubmit} disabled={submitting}>
-              {submitting ? 'Submitting...' : 'Submit Purchase Order'}
-            </button>
+          </div>
+
+          {/* Summary — clean checkout-style panel, right-aligned */}
+          <div style={{padding:'1.5rem', background:'var(--bg)', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end'}}>
+            <div className="po-summary">
+              <div style={{display:'flex', flexDirection:'column', gap:'0.55rem'}}>
+                <div className="po-summary-row" style={{color:'var(--text-muted)'}}>
+                  <span>Items subtotal</span>
+                  <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(total)}</span>
+                </div>
+                {discountPct > 0 && (
+                  <div className="po-summary-row" style={{color:'var(--success)'}}>
+                    <span>Discount ({discountPct}% off)</span>
+                    <span style={{fontWeight:600}}>− {fmtINR(discountSaved)}</span>
+                  </div>
+                )}
+                <div className="po-summary-row" style={{color:'var(--text-muted)'}}>
+                  <span>Shipping ({selectedCourier?.name || '—'})</span>
+                  <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(shippingCost)}</span>
+                </div>
+                <div className="po-summary-row" style={{color:'var(--text-muted)'}}>
+                  <span>{IGST_LABEL}</span>
+                  <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(orderTotals.tax)}</span>
+                </div>
+              </div>
+              <div className="po-summary-row" style={{alignItems:'center', borderTop:'1px solid var(--border)', marginTop:'0.85rem', paddingTop:'0.85rem'}}>
+                <span style={{fontWeight:700, fontSize:'0.95rem'}}>Order Total</span>
+                <span style={{fontSize:'1.35rem', fontWeight:700, color:'var(--primary)'}}>{fmtINR(grandTotal)}</span>
+              </div>
+              <button className="btn btn-primary po-submit" onClick={openSubmit} disabled={submitting}>
+                {submitting ? 'Submitting...' : 'Submit Purchase Order'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -334,7 +370,7 @@ export default function CreatePO() {
             <table>
               <thead>
                 <tr>
-                  <th>Order ID</th>
+                  <th>PO Number</th>
                   <th>Date</th>
                   <th>Items</th>
                   <th>Total</th>
@@ -351,7 +387,7 @@ export default function CreatePO() {
                         style={{color:'var(--primary)', background:'none', border:'none', padding:0, cursor:'pointer', textDecoration:'underline'}}
                         onClick={() => setViewOrder(o)}
                       >
-                        ORD-{shortId(o.id)}
+                        {orderRef(o)}
                       </button>
                     </td>
                     <td className="text-sm">{fmtDate(o.created_at)}</td>
@@ -377,6 +413,42 @@ export default function CreatePO() {
           onChanged={reloadOrders}
           detailsOnly
         />
+      )}
+
+      {/* PO-number popup — partner sets their own reference (or skips). */}
+      {showPoModal && (
+        <div className="modal-overlay" onClick={() => !submitting && setShowPoModal(false)}>
+          <div className="modal" style={{maxWidth:'440px'}} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Your PO Number</h3>
+              <button className="modal-close" aria-label="Close" onClick={() => !submitting && setShowPoModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{fontSize:'0.85rem', color:'var(--text-muted)', marginBottom:'0.85rem'}}>
+                Give this order your own reference number so it's easy to track on your side.
+                Leave it blank to use an auto-generated number.
+              </p>
+              <input
+                className="form-input"
+                style={{width:'100%'}}
+                placeholder="e.g. CUSSJKFKJ"
+                value={poNumber}
+                autoFocus
+                maxLength={40}
+                onChange={e => setPoNumber(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && !submitting) handleSubmit(); }}
+              />
+            </div>
+            <div className="modal-footer">
+              <button className="btn btn-secondary" onClick={() => handleSubmit('')} disabled={submitting}>
+                {submitting ? 'Submitting...' : 'Skip'}
+              </button>
+              <button className="btn btn-primary" onClick={() => handleSubmit()} disabled={submitting}>
+                {submitting ? 'Submitting...' : 'Submit Purchase Order'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

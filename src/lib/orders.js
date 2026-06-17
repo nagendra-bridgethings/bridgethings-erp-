@@ -27,6 +27,16 @@ export async function notifyDispatchCleared(orderId) {
     { relatedOrderId: orderId });
 }
 
+// Partner-facing order reference. Prefer the PO number the partner typed at
+// submission so they track the order by their own number; fall back to the
+// system short id (ORD-XXXXXXXX) when they skipped it. Used everywhere an
+// order number is shown so the label is consistent across the app.
+export function orderRef(order) {
+  const po = order?.partner_po_number?.trim();
+  if (po) return po;
+  return 'ORD-' + (order?.id ? order.id.slice(0, 8).toUpperCase() : '');
+}
+
 // Embedded relational select: pulls each order with its items array AND each
 // item's product info in a single round-trip.
 const ORDER_SELECT = `
@@ -100,6 +110,7 @@ export async function createOrder({
   deliveryMethod = null,
   shippingCost = 0,
   requestedDeliveryDate = null,
+  partnerPoNumber = null,
 }) {
   if (!partnerId) throw new Error('partnerId is required');
   if (!items?.length) throw new Error('At least one item is required');
@@ -119,6 +130,7 @@ export async function createOrder({
       delivery_method:         deliveryMethod || null,
       shipping_cost:           shipping,
       requested_delivery_date: requestedDeliveryDate || null,
+      partner_po_number:       partnerPoNumber?.trim() || null,
     })
     .select()
     .single();

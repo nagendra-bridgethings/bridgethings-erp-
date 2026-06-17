@@ -4,7 +4,7 @@
 // → trigger auto-updates orders.amount_paid + payment_status.
 import { useCallback, useEffect, useState } from 'react';
 import { usePartners } from '../../lib/partners';
-import { useOrders } from '../../lib/orders';
+import { useOrders, orderRef } from '../../lib/orders';
 import {
   usePaymentsForOrder, addPayment, deletePayment,
   PAYMENT_METHODS, PAYMENT_METHOD_LABEL,
@@ -57,7 +57,7 @@ export default function Finance() {
     if (!term) return base;
     return base.filter(o => {
       const p = getPartner(o.partner_id);
-      const hay = [shortId(o.id), o.id, p?.name, p?.company_name, p?.email]
+      const hay = [orderRef(o), shortId(o.id), o.id, o.partner_po_number, p?.name, p?.company_name, p?.email]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
@@ -144,7 +144,7 @@ export default function Finance() {
                       style={{color:'var(--primary)', background:'none', border:'none', padding:0, cursor:'pointer', textDecoration:'underline', fontSize:'inherit'}}
                       title="Click to view order details"
                     >
-                      ORD-{shortId(order.id)}
+                      {orderRef(order)}
                     </button>
                     <span className="text-sm text-muted">{partner?.name || partner?.company_name || '—'}</span>
                     <span className={`badge ${order.payment_status==='completed'?'badge-success':order.payment_status==='partial'?'badge-warning':'badge-danger'}`}>
@@ -224,7 +224,7 @@ function PendingVerificationList({ getPartner, onChange }) {
     await supabase.auth.getSession();
     const { data, error } = await supabase
       .from('bridgethings_order_payments')
-      .select('*, order:bridgethings_orders(id, partner_id, total_amount, amount_paid)')
+      .select('*, order:bridgethings_orders(id, partner_id, total_amount, amount_paid, partner_po_number)')
       .eq('status', 'pending_verification')
       .order('created_at', { ascending: true });
     if (error) {
@@ -272,7 +272,7 @@ function PendingVerificationList({ getPartner, onChange }) {
                 const busy = busyId === p.id;
                 return (
                   <tr key={p.id}>
-                    <td className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(p.order_id)}</td>
+                    <td className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(p.order)}</td>
                     <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
                     <td className="text-sm">{fmtDate(p.payment_date)}</td>
                     <td className="text-sm">{PAYMENT_METHOD_LABEL[p.payment_method] || p.payment_method}</td>
@@ -371,7 +371,7 @@ function VerifyPaymentModal({ row, getPartner, onClose, onVerified }) {
             <div style={{display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(140px, 1fr))', gap:'0.75rem', marginBottom:'1rem', padding:'0.85rem', background:'var(--bg)', borderRadius:'8px'}}>
               <div>
                 <div className="text-xs text-muted">Order</div>
-                <div className="font-semibold">ORD-{shortId(row.order_id)}</div>
+                <div className="font-semibold">{orderRef(row.order)}</div>
               </div>
               <div>
                 <div className="text-xs text-muted">Partner</div>
@@ -640,7 +640,7 @@ function AddPaymentModal({ order, onClose, onSaved }) {
         referenceNumber: reference,
         notes,
       });
-      addToast(`₹${amt.toLocaleString('en-IN')} recorded for ORD-${shortId(order.id)}`, 'success');
+      addToast(`₹${amt.toLocaleString('en-IN')} recorded for ${orderRef(order)}`, 'success');
       await onSaved();
     } catch (err) {
       console.error('[payments] add failed:', err);
@@ -654,7 +654,7 @@ function AddPaymentModal({ order, onClose, onSaved }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal modal-lg" onClick={e => e.stopPropagation()} style={{maxWidth:'560px'}}>
         <div className="modal-header">
-          <h3>Record Payment — ORD-{shortId(order.id)}</h3>
+          <h3>Record Payment — {orderRef(order)}</h3>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">

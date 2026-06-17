@@ -11,6 +11,7 @@ import {
   useUnitSubscriptions, requestSubscriptions,
   effectiveStatus, daysRemaining, latestSubFor,
 } from '../../lib/subscriptions';
+import { orderRef } from '../../lib/orders';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
@@ -61,7 +62,7 @@ export default function PartnerDevices() {
           *,
           item:bridgethings_order_items!inner(
             id, qty,
-            order:bridgethings_orders!inner(id, delivered_date, fulfillment_status),
+            order:bridgethings_orders!inner(id, delivered_date, fulfillment_status, partner_po_number),
             product:bridgethings_products(id, name, subscription_price)
           )
         `)
@@ -105,7 +106,7 @@ export default function PartnerDevices() {
     return base.filter(r => {
       const hay = [
         r.unit.serial_number, r.unit.sim, r.unit.sim_number, r.unit.dashboard_username,
-        r.unit.item?.product?.name, shortId(r.unit.item?.order?.id),
+        r.unit.item?.product?.name, orderRef(r.unit.item?.order), shortId(r.unit.item?.order?.id), r.unit.item?.order?.partner_po_number,
       ].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
@@ -293,7 +294,7 @@ export default function PartnerDevices() {
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.serial_number || '—'}</code></td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim || '—'}</code></td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim_number || '—'}</code></td>
-                      <td className="text-sm"><span style={{color:'var(--primary)'}}>ORD-{shortId(r.unit.item?.order?.id)}</span></td>
+                      <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
                       <td className="text-sm">{fmtDate(r.latest?.end_date)}</td>
                       <td className="text-sm">

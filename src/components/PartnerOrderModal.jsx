@@ -2,9 +2,8 @@
 // Used by /partner/orders and /partner (dashboard) so clicking an order ID
 // anywhere gives the partner the same view.
 import { useEffect, useMemo, useState } from 'react';
-import { getOrderStepperSteps } from '../lib/orderStepper';
 import { loadUnitDetailsForItems } from '../lib/orderUnits';
-import { acceptDeliveryCounter, declineDeliveryCounter, saveShipTo, derivePartnerStatusLabel } from '../lib/orders';
+import { acceptDeliveryCounter, declineDeliveryCounter, saveShipTo, derivePartnerStatusLabel, orderRef } from '../lib/orders';
 import { DOC_LABELS, EWAY_BILL_THRESHOLD, requiredDocsForShipment, useLegacyOrderDocs, useShipmentDocs, uploadShipmentDoc, getPartnerDocUrl } from '../lib/partnerDocs';
 import { usePaymentsForOrder, PAYMENT_METHOD_LABEL, PAYMENT_METHODS, submitPaymentProof, getPaymentSlipUrl } from '../lib/payments';
 import { useAuth } from '../lib/auth';
@@ -17,7 +16,6 @@ const ORDER_STATUS_COLORS = { draft:'badge-gray', pending_approval:'badge-warnin
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
-const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
 export default function PartnerOrderModal({ order, onClose, onChanged, detailsOnly = false }) {
   const { addToast } = useToast();
@@ -97,7 +95,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
       <div className="modal modal-lg" onClick={e => e.stopPropagation()} style={{maxWidth:'820px'}}>
         <div className="modal-header">
           <h3>
-            Order ORD-{shortId(order.id)}{' '}
+            Order {orderRef(order)}{' '}
             {(() => {
               // PO context (detailsOnly): show the order-level status only —
               // production states like "Hold" are internal to ops and don't
@@ -147,7 +145,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
           {counterPending && (
             <div style={{padding:'1rem', background:'#fffbeb', border:'1px solid var(--warning)', borderRadius:'8px', marginBottom:'1rem'}}>
               <div className="font-semibold" style={{color:'var(--warning)'}}>
-                Bridge Things proposed a different delivery date
+                Bridge Things proposed a different dispatch date
               </div>
               <div style={{display:'flex', flexWrap:'wrap', gap:'1.5rem', marginTop:'0.6rem'}}>
                 <div>
@@ -179,13 +177,13 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
             <div style={{padding:'0.6rem 0.85rem', background:'rgba(34,197,94,0.08)', border:'1px solid var(--success)', borderRadius:'8px', marginBottom:'1rem', fontSize:'0.85rem', display:'flex', flexWrap:'wrap', gap:'1.5rem'}}>
               {order.requested_delivery_date && (
                 <div>
-                  <span className="text-muted">Requested delivery date:</span>{' '}
+                  <span className="text-muted">Requested dispatch date:</span>{' '}
                   <span className="font-semibold">{fmtDate(order.requested_delivery_date)}</span>
                 </div>
               )}
               {order.committed_delivery_date && (
                 <div>
-                  <span className="text-muted">Committed delivery date:</span>{' '}
+                  <span className="text-muted">Committed dispatch date:</span>{' '}
                   <span className="font-semibold" style={{color:'var(--success)'}}>{fmtDate(order.committed_delivery_date)}</span>
                 </div>
               )}
@@ -205,17 +203,17 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
               </button>
               <button
                 type="button"
-                className={`tab${tab === 'tracking' ? ' active' : ''}`}
-                onClick={() => setTab('tracking')}
-              >
-                Tracking
-              </button>
-              <button
-                type="button"
                 className={`tab${tab === 'payments' ? ' active' : ''}`}
                 onClick={() => setTab('payments')}
               >
                 Payments
+              </button>
+              <button
+                type="button"
+                className={`tab${tab === 'tracking' ? ' active' : ''}`}
+                onClick={() => setTab('tracking')}
+              >
+                Tracking
               </button>
             </div>
           )}
@@ -435,28 +433,8 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, delivere
 }
 
 function TrackingTab({ order, onChanged }) {
-  const steps = getOrderStepperSteps(order);
   return (
     <>
-      <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.75rem'}}>
-        Status
-      </h4>
-      <div style={{padding:'1.25rem', border:'1px solid var(--border)', borderRadius:'8px', marginBottom:'1.25rem'}}>
-        <div className="status-stepper">
-          {steps.map((step, i, arr) => (
-            <div key={step.key} style={{display:'flex', alignItems:'center', flex:1}}>
-              <div className="step" style={{flex:'none'}}>
-                <div className={`step-circle ${step.done?'done':step.active?'active':''}`}>{step.done ? '✓' : i+1}</div>
-                <div className={`step-label ${step.done?'done':step.active?'active':''}`}>{step.label}</div>
-              </div>
-              {i < arr.length - 1 && (
-                <div style={{flex:1, height:'2px', background: step.done ? 'var(--success)' : 'var(--border)', margin:'0 4px', marginTop:'-20px'}}/>
-              )}
-            </div>
-          ))}
-        </div>
-      </div>
-
       <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
         Shipments
       </h4>

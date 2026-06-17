@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { usePartners } from '../../lib/partners';
-import { useOrders } from '../../lib/orders';
+import { useOrders, orderRef } from '../../lib/orders';
 import { approveDispatch, rejectDispatch } from '../../lib/orders';
 import { resolveOpsTeam } from '../../lib/portalPaths';
 import POReviewModal from '../../components/POReviewModal';
@@ -11,7 +11,6 @@ import { useToast } from '../../lib/toast';
 import { supabase } from '../../lib/supabase';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
-const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
 const statusBadge = status => {
   const map = { draft:'badge-gray', pending_approval:'badge-warning', active:'badge-info', completed:'badge-success' };
@@ -203,7 +202,7 @@ export default function AdminDashboard() {
                       onClick={() => setOpenPO({ order: o, partner })}
                       title="Click to review the PO"
                     >
-                      <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
+                      <td><span className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(o)}</span></td>
                       <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
                       <td className="text-sm font-semibold" style={{textAlign:'right'}}>{fmtINR(o.total_amount)}</td>
                       <td>{statusBadge(o.status)}</td>
@@ -247,7 +246,7 @@ function DispatchApprovalsCard({ orders, getPartner, reload, addToast }) {
     try {
       await approveDispatch(order.id);
       await reload();
-      addToast(`ORD-${shortId(order.id)} approved for production`, 'success');
+      addToast(`${orderRef(order)} approved for production`, 'success');
     } catch (err) {
       console.error('[dispatch] approve failed:', err);
       addToast(err.message || 'Failed to approve dispatch', 'error');
@@ -283,7 +282,7 @@ function DispatchApprovalsCard({ orders, getPartner, reload, addToast }) {
               const busy        = busyId === o.id;
               return (
                 <tr key={o.id}>
-                  <td><span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(o.id)}</span></td>
+                  <td><span className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(o)}</span></td>
                   <td className="text-sm">{partner?.name || partner?.company_name || '—'}</td>
                   <td className="text-sm font-semibold" style={{textAlign:'right'}}>{fmtINR(total)}</td>
                   <td className="text-sm" style={{textAlign:'right', color:'var(--success)'}}>{fmtINR(paid)} <span className="text-xs text-muted">({pct}%)</span></td>
@@ -346,7 +345,7 @@ function RejectDispatchModal({ order, onClose, onSaved }) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{maxWidth:'520px'}}>
         <div className="modal-header">
-          <h3>Reject Production — ORD-{shortId(order.id)}</h3>
+          <h3>Reject Production — {orderRef(order)}</h3>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">

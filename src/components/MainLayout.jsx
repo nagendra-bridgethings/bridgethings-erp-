@@ -133,7 +133,7 @@ export default function MainLayout() {
           <div className="user-info">
             <div className="user-avatar">{initials}</div>
             <div>
-              <div className="user-name">{displayName}</div>
+              <div className="user-name" title={displayName}>{displayName}</div>
               <div className="user-role">{getRoleLabel(user.role, user)}</div>
             </div>
           </div>

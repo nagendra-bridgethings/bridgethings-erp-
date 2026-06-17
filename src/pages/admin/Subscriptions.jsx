@@ -10,10 +10,10 @@ import {
   setDashboardCredentials,
   effectiveStatus, latestSubFor, addOneYear,
 } from '../../lib/subscriptions';
+import { orderRef } from '../../lib/orders';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
-const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 const today   = () => new Date().toISOString().slice(0, 10);
 
 const STATUS_LABELS = {
@@ -56,7 +56,7 @@ export default function Subscriptions() {
           *,
           item:bridgethings_order_items(
             id, qty,
-            order:bridgethings_orders(id, partner_id, status, delivered_date),
+            order:bridgethings_orders(id, partner_id, status, delivered_date, partner_po_number),
             product:bridgethings_products(id, name, subscription_price)
           )
         `)
@@ -221,7 +221,7 @@ export default function Subscriptions() {
                       <td className="text-sm">{r.partner?.name || r.partner?.company_name || '—'}</td>
                       <td className="text-sm font-semibold">{r.product?.name || '—'}</td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.serial_number || '—'}</code></td>
-                      <td className="text-sm"><span style={{color:'var(--primary)'}}>ORD-{shortId(r.unit.item?.order?.id)}</span></td>
+                      <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
                       <td className="text-sm">{isPending ? '—' : fmtDate(r.latest?.start_date)}</td>
                       <td className="text-sm">{isPending ? '—' : fmtDate(r.latest?.end_date)}</td>

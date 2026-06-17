@@ -47,7 +47,7 @@ function RoleGate({ allowed, user, children }) {
 }
 
 function ProtectedRoutes() {
-  const { user, rawUser, loading } = useAuth();
+  const { user, rawUser, profile, loading, logout } = useAuth();
 
   const loadingScreen = (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f1f5f9' }}>
@@ -58,9 +58,33 @@ function ProtectedRoutes() {
   if (loading) return loadingScreen;
   // No supabase session at all → genuinely logged out.
   if (!rawUser) return <Navigate to="/login" replace />;
-  // Session exists but profile hasn't finished loading yet. Do NOT redirect
-  // to /login here — that's how the "auto logout then auto login" flicker
-  // happens when the safety timer races the profile fetch.
+  // Session exists but the profile fetch has FINISHED and resolved to null
+  // (profile === null, not undefined). This means the signed-in account has
+  // no row in any role table — an orphaned session that can never load the
+  // app. Don't spin forever: show a recoverable screen that clears the
+  // session and returns to login. (We check `profile === null` rather than
+  // `!user` so the stub-role hydration path — where profile is {role} — is
+  // not caught here.)
+  if (profile === null) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem', background: '#f1f5f9', padding: '1.5rem', textAlign: 'center' }}>
+        <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a' }}>This account isn't set up for any role.</div>
+        <div style={{ fontSize: '0.875rem', color: '#64748b', maxWidth: 420 }}>
+          Your sign-in was successful, but this email isn't registered as an Admin, Operations, Accountant, or Channel Partner. Please contact your administrator, or sign in with a different account.
+        </div>
+        <button
+          onClick={async () => { await logout(); }}
+          style={{ marginTop: '0.5rem', padding: '0.5rem 1.25rem', fontSize: '0.875rem', fontWeight: 500, color: '#fff', background: '#2563eb', border: 'none', borderRadius: 8, cursor: 'pointer' }}
+        >
+          Back to login
+        </button>
+      </div>
+    );
+  }
+  // Session exists but profile hasn't finished loading yet (profile is the
+  // initial undefined/stub state). Do NOT redirect to /login here — that's
+  // how the "auto logout then auto login" flicker happens when the safety
+  // timer races the profile fetch.
   if (!user) return loadingScreen;
 
   const home = portalPrefixFor(user);

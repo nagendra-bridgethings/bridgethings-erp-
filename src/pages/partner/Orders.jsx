@@ -3,7 +3,7 @@
 // (Details + Tracking). The modal is shared with the partner Dashboard so
 // the click-to-detail experience is consistent across the portal.
 import { useMemo, useState } from 'react';
-import { useOrders, derivePartnerStatusLabel, useOrderStatusBreakdown, partnerStatusBadges } from '../../lib/orders';
+import { useOrders, derivePartnerStatusLabel, useOrderStatusBreakdown, partnerStatusBadges, orderRef } from '../../lib/orders';
 import PartnerOrderModal from '../../components/PartnerOrderModal';
 
 const ORDER_STATUS_LABELS = { draft:'Draft', pending_approval:'Awaiting Confirmation', active:'In Progress', completed:'Completed', rejected:'Rejected' };
@@ -49,7 +49,7 @@ export default function MyOrders() {
     const term = search.trim().toLowerCase();
     if (!term) return base;
     return base.filter(o => {
-      const hay = [shortId(o.id), o.id, o.status, o.payment_status, o.delivery_method, o.tracking_number]
+      const hay = [orderRef(o), shortId(o.id), o.id, o.partner_po_number, o.status, o.payment_status, o.delivery_method, o.tracking_number]
         .filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
@@ -64,33 +64,31 @@ export default function MyOrders() {
         </div>
       </div>
 
-      <div className="tabs">
-        {tabs.map(t => (
-          <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)}>
-            {t === 'all' ? 'All Orders' : ORDER_STATUS_LABELS[t]}
-            <span className="count">{t === 'all' ? myOrders.length : myOrders.filter(o => o.status === t).length}</span>
-          </button>
-        ))}
-      </div>
-
-      <div style={{display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap', margin:'0.25rem 0 0.75rem 0'}}>
-        <span className="text-xs text-muted" style={{marginRight:'0.25rem', textTransform:'uppercase', letterSpacing:'0.05em'}}>Payment</span>
-        {paymentChips.map(chip => {
-          const count = chip.key === 'all'
-            ? myOrders.length
-            : myOrders.filter(o => paymentBucket(o) === chip.key).length;
-          const active = paymentFilter === chip.key;
-          return (
-            <button
-              key={chip.key}
-              type="button"
-              className={`btn btn-sm ${active ? 'btn-primary' : 'btn-ghost'}`}
-              onClick={() => setPaymentFilter(chip.key)}
-            >
-              {chip.label} <span className="text-muted" style={{marginLeft:'0.25rem'}}>({count})</span>
+      <div style={{display:'flex', alignItems:'center', justifyContent:'space-between', gap:'1rem', flexWrap:'wrap', borderBottom:'1px solid var(--border)', marginBottom:'1.5rem'}}>
+        <div className="tabs" style={{border:'none', margin:0}}>
+          {tabs.map(t => (
+            <button key={t} className={`tab ${activeTab === t ? 'active' : ''}`} onClick={() => setActiveTab(t)}>
+              {t === 'all' ? 'All Orders' : ORDER_STATUS_LABELS[t]}
+              <span className="count">{t === 'all' ? myOrders.length : myOrders.filter(o => o.status === t).length}</span>
             </button>
-          );
-        })}
+          ))}
+        </div>
+        <div style={{display:'flex', alignItems:'center', gap:'0.5rem', paddingBottom:'0.4rem'}}>
+          <span className="text-xs text-muted" style={{textTransform:'uppercase', letterSpacing:'0.05em'}}>Payment</span>
+          <select
+            className="form-select"
+            value={paymentFilter}
+            onChange={e => setPaymentFilter(e.target.value)}
+            style={{minWidth:'150px'}}
+          >
+            {paymentChips.map(chip => {
+              const count = chip.key === 'all'
+                ? myOrders.length
+                : myOrders.filter(o => paymentBucket(o) === chip.key).length;
+              return <option key={chip.key} value={chip.key}>{chip.label} ({count})</option>;
+            })}
+          </select>
+        </div>
       </div>
 
       <div className="card" style={{marginBottom:'1rem'}}>
@@ -130,7 +128,7 @@ export default function MyOrders() {
                     title="Click to view details and tracking"
                   >
                     <td>
-                      <span className="font-semibold" style={{color:'var(--primary)'}}>ORD-{shortId(order.id)}</span>
+                      <span className="font-semibold" style={{color:'var(--primary)'}}>{orderRef(order)}</span>
                     </td>
                     <td className="text-sm">{fmtDate(order.created_at)}</td>
                     <td className="text-sm font-semibold" style={{textAlign:'right'}}>{fmtINR(order.total_amount)}</td>
