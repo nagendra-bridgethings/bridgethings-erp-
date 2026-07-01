@@ -4,7 +4,7 @@ import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
 import ImageLightbox from '../../components/ImageLightbox';
 
-const EMPTY = { name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [], datasheet_url: '', installation_guide_url: '' };
+const EMPTY = { name: '', internal_name: '', description: '', features: '', base_price: '', subscription_price: '', image_urls: [], datasheet_url: '', installation_guide_url: '', cable_supported: false };
 const PRODUCT_IMAGES_BUCKET = 'bridgethings-product-images';
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
@@ -119,7 +119,7 @@ export default function ProductsPage() {
   useEffect(() => { loadProducts(); }, []);
 
   const filtered = products.filter(p =>
-    p.name.toLowerCase().includes(search.toLowerCase())
+    `${p.name || ''} ${p.internal_name || ''}`.toLowerCase().includes(search.toLowerCase())
   );
 
   const openNew = () => { setForm(EMPTY); setEditing(null); setShowModal(true); };
@@ -132,6 +132,7 @@ export default function ProductsPage() {
       : (p.image_url ? [p.image_url] : []);
     setForm({
       name: p.name || '',
+      internal_name: p.internal_name || '',
       description: p.description || '',
       features: featuresToString(p.features),
       base_price: p.base_price ?? '',
@@ -139,6 +140,7 @@ export default function ProductsPage() {
       image_urls: existing,
       datasheet_url: p.datasheet_url || '',
       installation_guide_url: p.installation_guide_url || '',
+      cable_supported: !!p.cable_supported,
     });
     setEditing(p.id);
     setShowModal(true);
@@ -146,10 +148,12 @@ export default function ProductsPage() {
 
   const handleSave = async () => {
     if (!form.name.trim()) { addToast('Product name is required', 'error'); return; }
+    if (!form.internal_name.trim()) { addToast('Internal name is required', 'error'); return; }
     setSaving(true);
     const cleanImages = (form.image_urls || []).map(u => u.trim()).filter(Boolean);
     const payload = {
       name: form.name.trim(),
+      internal_name: form.internal_name.trim(),
       description: form.description.trim() || null,
       features: featuresToArray(form.features),
       base_price: parseFloat(form.base_price) || 0,
@@ -161,6 +165,7 @@ export default function ProductsPage() {
       image_url: cleanImages[0] || null,
       datasheet_url: form.datasheet_url?.trim() || null,
       installation_guide_url: form.installation_guide_url?.trim() || null,
+      cable_supported: !!form.cable_supported,
     };
 
     try {
@@ -243,7 +248,8 @@ export default function ProductsPage() {
                   onError={e => e.target.style.display = 'none'} />
               )}
               <div style={{padding:'1.25rem'}}>
-                <div style={{fontWeight:700, fontSize:'0.95rem', marginBottom:'0.25rem', color:'var(--text)'}}>{p.name}</div>
+                <div style={{fontWeight:700, fontSize:'0.95rem', marginBottom:'0.1rem', color:'var(--text)'}}>{p.internal_name || p.name}</div>
+                <div style={{fontSize:'0.72rem', color:'var(--text-muted)', marginBottom:'0.4rem'}}>Customer: {p.name}</div>
                 <div style={{fontSize:'0.8rem', color:'var(--text-muted)', marginBottom:'0.75rem', lineHeight:'1.4'}}>{(p.description || '').slice(0,90)}{p.description && p.description.length > 90 ? '...' : ''}</div>
                 <div style={{display:'flex', flexWrap:'wrap', gap:'0.35rem', marginBottom:'0.75rem'}}>
                   {(p.features||[]).slice(0,3).map(f => (
@@ -277,8 +283,14 @@ export default function ProductsPage() {
             <div className="modal-body">
               <div className="form-grid">
                 <div className="form-group">
-                  <label className="form-label">Product Name *</label>
+                  <label className="form-label">Product Name (customer-facing) *</label>
                   <input className="form-input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} placeholder="e.g. WFM-100 Electromagnetic Flow Meter" />
+                  <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>Shown to channel partners.</div>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Internal Name *</label>
+                  <input className="form-input" value={form.internal_name} onChange={e => setForm({...form, internal_name: e.target.value})} placeholder="e.g. Mira DN100 (vendor X)" />
+                  <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>Seen only by your team — never shown to customers.</div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Base Price (₹)</label>
@@ -315,6 +327,13 @@ export default function ProductsPage() {
                     onChange={e => setForm({...form, installation_guide_url: e.target.value})}
                     placeholder="https://...  (link to installation manual — partners click this to view)"
                   />
+                </div>
+                <div className="form-group" style={{gridColumn:'1 / -1'}}>
+                  <label className="form-label" style={{display:'flex', alignItems:'center', gap:'0.5rem', cursor:'pointer'}}>
+                    <input type="checkbox" checked={form.cable_supported} onChange={e => setForm({...form, cable_supported: e.target.checked})} />
+                    This product includes a sensor cable (50 m free; ₹75 per extra metre)
+                  </label>
+                  <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>When on, partners can request extra cable while adding this product to a PO.</div>
                 </div>
                 <div className="form-group" style={{gridColumn:'1 / -1'}}>
                   <label className="form-label">Product Images</label>
@@ -403,7 +422,7 @@ export default function ProductsPage() {
         <div className="modal-overlay" onClick={() => setShowDetail(null)}>
           <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>{showDetail.name}</h3>
+              <h3>{showDetail.internal_name || showDetail.name}</h3>
               <button className="modal-close" onClick={() => setShowDetail(null)}>✕</button>
             </div>
             <div className="modal-body">

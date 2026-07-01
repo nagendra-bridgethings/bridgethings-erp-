@@ -15,7 +15,6 @@ import POReceived        from './pages/admin/POReceived';
 import Fulfillment       from './pages/admin/Fulfillment';
 import Subscriptions     from './pages/admin/Subscriptions';
 import Partners          from './pages/admin/Partners';
-import AuditLogs         from './pages/admin/AuditLogs';
 
 // Partner
 import PartnerDashboard  from './pages/partner/Dashboard';
@@ -93,7 +92,7 @@ function ProtectedRoutes() {
   // Mount the three shared admin-portal pages (Dashboard, Products,
   // Fulfillment) at /admin, /operations, and /dispatch — same component,
   // URL just reflects the team. Admin-only pages (po-received, subscriptions,
-  // partners, audit) stay under /admin only.
+  // partners) stay under /admin only.
   const adminPortalRoutes = (prefix) => (
     <>
       <Route path={prefix}                 element={<RoleGate allowed={ADMIN_ROLES} user={user}><AdminDashboard /></RoleGate>} />
@@ -128,7 +127,6 @@ function ProtectedRoutes() {
         <Route path="/admin/po-received"   element={<RoleGate allowed={ADMIN_ONLY} user={user}><POReceived /></RoleGate>} />
         <Route path="/admin/subscriptions" element={<RoleGate allowed={SUBSCRIPTION_ROLES} user={user}><Subscriptions /></RoleGate>} />
         <Route path="/admin/partners"      element={<RoleGate allowed={ADMIN_ONLY} user={user}><Partners /></RoleGate>} />
-        <Route path="/admin/audit"         element={<RoleGate allowed={ADMIN_ONLY} user={user}><AuditLogs /></RoleGate>} />
 
         {/* Partner Routes */}
         <Route path="/partner"          element={<RoleGate allowed={PARTNER_ROLES} user={user}><PartnerDashboard /></RoleGate>} />

@@ -240,6 +240,7 @@ function OrderShipmentsList({ order, shipments, productsById = {}, onBack, onPic
   // Map order_item_id → order_item for quick lookup of unit_price + product.
   const itemById = {};
   for (const it of (order.items || [])) itemById[it.id] = it;
+  const orderCableTotal = (order.items || []).reduce((s, it) => s + (Number(it.cable_charge) || 0), 0);
   const resolveProduct = (orderItem) =>
     orderItem?.product || productsById[orderItem?.product_id] || null;
 
@@ -266,7 +267,8 @@ function OrderShipmentsList({ order, shipments, productsById = {}, onBack, onPic
             return sum + price * (Number(si.qty) || 0);
           }, 0);
           const shippingOnThis = isFirst ? (Number(order.shipping_cost) || 0) : 0;
-          const taxable = subtotal + shippingOnThis;
+          const cableOnThis = isFirst ? orderCableTotal : 0;
+          const taxable = subtotal + shippingOnThis + cableOnThis;
           const tax     = taxable * GST_RATE;
           const total   = taxable + tax;
 
@@ -326,6 +328,9 @@ function OrderShipmentsList({ order, shipments, productsById = {}, onBack, onPic
                   {isFirst && shippingOnThis > 0 && (
                     <Row label="Shipping (charged once)" value={fmtINR(shippingOnThis)} />
                   )}
+                  {isFirst && cableOnThis > 0 && (
+                    <Row label="Extra cable (charged once)" value={fmtINR(cableOnThis)} />
+                  )}
                   <Row label={`IGST ${GST_RATE * 100}%`} value={fmtINR(tax)} />
                   <div style={{display:'flex', justifyContent:'space-between', borderTop:'1px solid var(--border)', paddingTop:'0.4rem', marginTop:'0.2rem'}}>
                     <span style={{fontWeight:700, color:'var(--primary)'}}>Invoice Total</span>
@@ -363,8 +368,10 @@ function InvoiceDetail({
   });
 
   const subtotal       = lineRows.reduce((s, r) => s + r.amount, 0);
+  const orderCableTotal = (order.items || []).reduce((s, it) => s + (Number(it.cable_charge) || 0), 0);
   const shippingOnThis = isFirstShipment ? (Number(order.shipping_cost) || 0) : 0;
-  const taxable        = subtotal + shippingOnThis;
+  const cableOnThis    = isFirstShipment ? orderCableTotal : 0;
+  const taxable        = subtotal + shippingOnThis + cableOnThis;
   const tax            = taxable * GST_RATE;
   const total          = taxable + tax;
   const invNo          = invoiceNo(order.id, shipmentIndex);
@@ -534,6 +541,9 @@ function InvoiceDetail({
             <Row label="Untaxed Amount" value={fmtINR(subtotal)} />
             {isFirstShipment && shippingOnThis > 0 && (
               <Row label={`Shipping${shipment.courier ? ` (${shipment.courier})` : ''}`} value={fmtINR(shippingOnThis)} />
+            )}
+            {isFirstShipment && cableOnThis > 0 && (
+              <Row label="Extra cable" value={fmtINR(cableOnThis)} />
             )}
             <Row label={`IGST ${GST_RATE * 100}%`} value={fmtINR(tax)} />
             <div style={{

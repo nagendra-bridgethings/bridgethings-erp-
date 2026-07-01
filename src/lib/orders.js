@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
 import { computeOrderTotal } from './tax';
+import { cableChargeFor } from './cable';
 import { notify, loadOrderParty, orderShortId, fmtDate } from './notify';
 
 // Fire the two "order cleared for dispatch" notifications: the partner
@@ -43,7 +44,7 @@ const ORDER_SELECT = `
   *,
   items:bridgethings_order_items(
     *,
-    product:bridgethings_products(id, name, base_price, image_url, features)
+    product:bridgethings_products(id, name, internal_name, base_price, image_url, features)
   )
 `;
 
@@ -116,7 +117,9 @@ export async function createOrder({
   if (!items?.length) throw new Error('At least one item is required');
 
   const itemsSubtotal = items.reduce((s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0), 0);
-  const { shipping, tax, total } = computeOrderTotal({ itemsSubtotal, shipping: shippingCost });
+  // Extra-cable charges are taxable goods → fold into the IGST base.
+  const cableSubtotal = items.reduce((s, i) => s + cableChargeFor(i.extra_cable_m, i.qty), 0);
+  const { shipping, tax, total } = computeOrderTotal({ itemsSubtotal: itemsSubtotal + cableSubtotal, shipping: shippingCost });
 
   const { data: order, error: orderErr } = await supabase
     .from('bridgethings_orders')
@@ -138,11 +141,13 @@ export async function createOrder({
   if (orderErr) throw orderErr;
 
   const itemRows = items.map(i => ({
-    order_id:   order.id,
-    product_id: i.product_id,
-    qty:        Number(i.qty) || 1,
-    unit_price: Number(i.unit_price) || 0,
-    notes:      i.notes?.trim() || null,
+    order_id:      order.id,
+    product_id:    i.product_id,
+    qty:           Number(i.qty) || 1,
+    unit_price:    Number(i.unit_price) || 0,
+    notes:         i.notes?.trim() || null,
+    extra_cable_m: Math.max(0, Math.floor(Number(i.extra_cable_m) || 0)),
+    cable_charge:  cableChargeFor(i.extra_cable_m, i.qty),
   }));
 
   const { data: insertedItems, error: itemsErr } = await supabase

@@ -10,6 +10,8 @@ import {
   loadUnitDetailsForItems, upsertUnitDetail,
   setUnitsProductionStatus, sendUnitsBackToOps,
 } from '../../lib/orderUnits';
+import { staffProductName } from '../../lib/productName';
+import { CABLE_FREE_METERS } from '../../lib/cable';
 import ShipmentsPanel from '../../components/ShipmentsPanel';
 import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
@@ -221,7 +223,7 @@ export default function Fulfillment() {
       // — applies to brand-new units AND any old units in the DB that were
       // saved before this default existed. Employee can still override via
       // the pencil icon if a specific unit needs a different label.
-      const defaultType = item.product?.name || '';
+      const defaultType = staffProductName(item.product) || '';
       map[item.id] = Array.from({ length: qty }, (_, i) => {
         const found = existingForItem.find(u => u.unit_index === i + 1);
         if (found) {
@@ -645,7 +647,7 @@ export default function Fulfillment() {
                     if (!selected) return;
                     const { data: items } = await supabase
                       .from('bridgethings_order_items')
-                      .select('*, product:bridgethings_products(id, name, base_price, image_url, features)')
+                      .select('*, product:bridgethings_products(id, name, internal_name, base_price, image_url, features)')
                       .eq('order_id', selected.id);
                     const itemIds = (items || []).map(i => i.id);
                     const existing = await loadUnitDetailsForItems(itemIds);
@@ -976,9 +978,14 @@ function ItemUnitsEditor({ item, units, onUpdate, team = 'operations', frozen = 
       <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'0.75rem', marginBottom:'0.5rem', flexWrap:'wrap'}}>
         <div style={{display:'flex', alignItems:'center', gap:'0.6rem', flexWrap:'wrap'}}>
           <div className="font-semibold">
-            {item.product?.name || 'Unknown product'}{' '}
+            {staffProductName(item.product) || 'Unknown product'}{' '}
             <span className="text-sm text-muted">— {filledCount}/{units.length} unit(s) filled</span>
           </div>
+          {Number(item.extra_cable_m) > 0 && (
+            <span className="badge badge-warning" style={{fontSize:'0.7rem'}}>
+              Cable: {CABLE_FREE_METERS + Number(item.extra_cable_m)} m/unit
+            </span>
+          )}
           {order.filter(s => counts[s]).map(s => (
             <span key={s} className={`badge ${cls[s]}`}>{counts[s]} {label[s]}</span>
           ))}

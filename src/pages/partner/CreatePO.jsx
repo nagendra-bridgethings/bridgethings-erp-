@@ -2,11 +2,12 @@
 // Items are added from the Catalog page and live in the cart context
 // (persisted to localStorage) so navigating between pages preserves the draft.
 import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth';
 import { useCart } from '../../lib/cart';
 import { createOrder, useOrders, orderRef } from '../../lib/orders';
 import { COURIERS } from '../../lib/couriers';
+import { CABLE_FREE_METERS, CABLE_RATE_PER_METER, cableChargeFor } from '../../lib/cable';
 import { computeOrderTotal, IGST_LABEL } from '../../lib/tax';
 import { useToast } from '../../lib/toast';
 import PartnerOrderModal from '../../components/PartnerOrderModal';
@@ -56,10 +57,15 @@ export default function CreatePO() {
     0,
   );
   const discountSaved = total - itemsAfterDiscount;
+  // Extra-cable charges (only for products that support cable).
+  const cableTotal = items.reduce(
+    (s, i) => s + (i.product?.cable_supported ? cableChargeFor(i.extra_cable_m, i.qty) : 0),
+    0,
+  );
   // Grand total = (items − discount) + shipping + IGST on the discounted
   // subtotal. Matches the server-side math in createOrder() because we
   // pass the same discounted unit_price below.
-  const orderTotals = computeOrderTotal({ itemsSubtotal: itemsAfterDiscount, shipping: shippingCost });
+  const orderTotals = computeOrderTotal({ itemsSubtotal: itemsAfterDiscount + cableTotal, shipping: shippingCost });
   const grandTotal  = orderTotals.total;
   // Pull the partner's recent orders (RLS scopes to their own) so they can
   // see/track previously-submitted POs without leaving this page. We pull
@@ -119,10 +125,11 @@ export default function CreatePO() {
       await createOrder({
         partnerId: user.supabaseId,
         items: items.map(i => ({
-          product_id: i.product_id,
-          qty:        i.qty,
-          unit_price: applyDiscount(i.product.base_price, discountPct),
-          notes:      i.notes,
+          product_id:    i.product_id,
+          qty:           i.qty,
+          unit_price:    applyDiscount(i.product.base_price, discountPct),
+          notes:         i.notes,
+          extra_cable_m: i.product?.cable_supported ? (i.extra_cable_m || 0) : 0,
         })),
         status:                'pending_approval',
         deliveryMethod:        selectedCourier?.name || null,
@@ -160,24 +167,45 @@ export default function CreatePO() {
   return (
     <>
       <style>{`
-        .po-section { padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); }
+        /* Two-column checkout: line items on the left, a sticky order
+           summary on the right so the panel always stays in view as the
+           partner scrolls long carts. Collapses to one column on tablets. */
+        .po-layout {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 360px;
+          gap: 1.5rem; align-items: start; margin-bottom: 1.5rem;
+        }
+        @media (max-width: 900px) { .po-layout { grid-template-columns: 1fr; } }
+
+        .po-item { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); transition: background 0.15s ease; }
+        .po-item:hover { background: var(--bg); }
+        .po-item:last-child { border-bottom: 0; }
+
+        .po-section { padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); background: var(--bg); }
         .po-section-title {
           font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em;
           text-transform: uppercase; color: var(--text-muted); margin-bottom: 0.85rem;
         }
-        .po-courier { transition: all 0.15s ease; }
-        .po-courier:hover { border-color: var(--primary) !important; box-shadow: var(--shadow-sm); }
         .po-date {
           max-width: 280px; width: 100%; cursor: pointer; font-variant-numeric: tabular-nums;
         }
         .po-date::-webkit-calendar-picker-indicator { cursor: pointer; opacity: 0.55; padding: 2px; }
         .po-date::-webkit-calendar-picker-indicator:hover { opacity: 1; }
         .po-date:invalid::-webkit-datetime-edit { color: var(--text-muted); }
-        .po-summary {
-          width: 100%; max-width: 380px; background: var(--card);
+
+        /* Sticky summary card (right column). On mobile it un-sticks and
+           simply stacks below the items. */
+        .po-summary-card {
+          position: sticky; top: 1.5rem; background: var(--card);
           border: 1px solid var(--border); border-radius: var(--radius);
-          padding: 1.25rem; box-shadow: var(--shadow-sm);
+          box-shadow: var(--shadow-sm); overflow: hidden;
         }
+        @media (max-width: 900px) { .po-summary-card { position: static; } }
+        .po-summary-head {
+          padding: 1rem 1.25rem; border-bottom: 1px solid var(--border);
+          font-size: 0.95rem; font-weight: 700; color: var(--text);
+        }
+        .po-summary-body { padding: 1.25rem; }
         .po-summary-row { display: flex; justify-content: space-between; gap: 1.5rem; font-size: 0.85rem; }
         .po-submit { width: 100%; justify-content: center; padding: 0.8rem 1.5rem !important; font-size: 0.95rem !important; font-weight: 600; margin-top: 1.1rem; }
         .po-clear { color: var(--danger) !important; border: 1px solid var(--border) !important; background: var(--card) !important; }
@@ -201,15 +229,18 @@ export default function CreatePO() {
         )}
       </div>
 
-      {/* Items List */}
+      {/* Build-a-PO area — two-column checkout (items + sticky summary) */}
       {items.length > 0 && (
-        <div className="card" style={{marginBottom:'1.25rem'}}>
+        <div className="po-layout">
+        {/* LEFT COLUMN — line items + dispatch date + delivery partner */}
+        <div className="card" style={{marginBottom:0}}>
           <div className="card-header"><h2>Order Items ({items.length})</h2></div>
           <div>
             {items.map((item, idx) => {
               const unitPrice = applyDiscount(item.product.base_price, discountPct);
+              const lineCable = item.product?.cable_supported ? cableChargeFor(item.extra_cable_m, item.qty) : 0;
               return (
-              <div key={item.product_id} style={{padding:'1.25rem 1.5rem', borderBottom:'1px solid var(--border)'}}>
+              <div key={item.product_id} className="po-item">
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:'0.75rem'}}>
                   <div>
                     <div className="font-semibold">{item.product.name}</div>
@@ -222,22 +253,38 @@ export default function CreatePO() {
                   </div>
                   <button className="btn btn-ghost btn-sm" style={{color:'var(--danger)'}} onClick={() => removeAt(idx)}>Remove</button>
                 </div>
-                <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-end'}}>
+                <div style={{display:'flex', gap:'1rem', flexWrap:'wrap', alignItems:'flex-start'}}>
                   <div className="form-group" style={{flex:'0 0 140px'}}>
                     <label className="form-label">Quantity</label>
                     <input type="number" min="1" className="form-input" value={item.qty}
                       onChange={e => updateField(idx, 'qty', Math.max(1, parseInt(e.target.value)||1))}
                       style={{width:'100%'}} />
                   </div>
-                  <div className="form-group" style={{flex:'1 1 280px'}}>
+                  <div className="form-group" style={{flex:'1 1 240px'}}>
                     <label className="form-label">Notes / Customization</label>
                     <input className="form-input" value={item.notes} placeholder="Optional notes..."
                       onChange={e => updateField(idx, 'notes', e.target.value)}
                       style={{width:'100%'}} />
                   </div>
+                  {item.product?.cable_supported && (
+                    <div className="form-group" style={{flex:'0 0 200px'}}>
+                      <label className="form-label">Extra cable (m)</label>
+                      <input type="number" min="0" className="form-input" value={item.extra_cable_m || 0}
+                        onChange={e => updateField(idx, 'extra_cable_m', Math.max(0, parseInt(e.target.value)||0))}
+                        style={{width:'100%'}} />
+                      <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>{CABLE_FREE_METERS} m free · ₹{CABLE_RATE_PER_METER}/m extra (per unit)</div>
+                    </div>
+                  )}
                 </div>
-                <div style={{textAlign:'right', fontWeight:600, color:'var(--primary)', marginTop:'0.5rem'}}>
-                  Item Total: {fmtINR(unitPrice * item.qty)}
+                <div style={{textAlign:'right', marginTop:'0.5rem'}}>
+                  {lineCable > 0 && (
+                    <div className="text-xs text-muted">
+                      Extra cable: {item.extra_cable_m} m × {item.qty} unit{item.qty > 1 ? 's' : ''} × ₹{CABLE_RATE_PER_METER} = {fmtINR(lineCable)}
+                    </div>
+                  )}
+                  <div style={{fontWeight:600, color:'var(--primary)'}}>
+                    Item Total: {fmtINR(unitPrice * item.qty + lineCable)}
+                  </div>
                 </div>
               </div>
               );
@@ -284,9 +331,12 @@ export default function CreatePO() {
             </div>
           </div>
 
-          {/* Summary — clean checkout-style panel, right-aligned */}
-          <div style={{padding:'1.5rem', background:'var(--bg)', borderTop:'1px solid var(--border)', display:'flex', justifyContent:'flex-end'}}>
-            <div className="po-summary">
+        </div>{/* end LEFT COLUMN card */}
+
+        {/* RIGHT COLUMN — sticky order summary */}
+        <div className="po-summary-card">
+          <div className="po-summary-head">Order Summary</div>
+          <div className="po-summary-body">
               <div style={{display:'flex', flexDirection:'column', gap:'0.55rem'}}>
                 <div className="po-summary-row" style={{color:'var(--text-muted)'}}>
                   <span>Items subtotal</span>
@@ -296,6 +346,12 @@ export default function CreatePO() {
                   <div className="po-summary-row" style={{color:'var(--success)'}}>
                     <span>Discount ({discountPct}% off)</span>
                     <span style={{fontWeight:600}}>− {fmtINR(discountSaved)}</span>
+                  </div>
+                )}
+                {cableTotal > 0 && (
+                  <div className="po-summary-row" style={{color:'var(--text-muted)'}}>
+                    <span>Extra cable</span>
+                    <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(cableTotal)}</span>
                   </div>
                 )}
                 <div className="po-summary-row" style={{color:'var(--text-muted)'}}>

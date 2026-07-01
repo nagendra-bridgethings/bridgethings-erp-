@@ -13,6 +13,7 @@ import {
 } from '../lib/shipments';
 import { COURIERS } from '../lib/couriers';
 import { useToast } from '../lib/toast';
+import { staffProductName } from '../lib/productName';
 import {
   EWAY_BILL_THRESHOLD, DOC_LABELS,
   useLegacyOrderDocs, useShipmentDocs,
@@ -153,7 +154,7 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
               const withOps = (counts.hold || 0) + (counts.production || 0) + (counts.sent_back || 0);
               return (
                 <div key={item.id} style={{display:'flex', justifyContent:'space-between', gap:'0.75rem', flexWrap:'wrap', fontSize:'0.85rem'}}>
-                  <span className="font-semibold">{item.product?.name || 'Unknown product'}</span>
+                  <span className="font-semibold">{staffProductName(item.product) || 'Unknown product'}</span>
                   <span>
                     <span style={{color: done ? 'var(--success)' : 'var(--text)'}}>{r.shipped}</span>
                     {' / '}
@@ -426,7 +427,7 @@ function ShipmentCard({ shipment, index, total, items, order, busy, onDeliver, o
   // Map order_item_id → product name + qty for this shipment
   const itemSummary = (shipment.items || []).map(si => {
     const item = (items || []).find(it => it.id === si.order_item_id);
-    return { name: item?.product?.name || 'Item', qty: si.qty };
+    return { name: staffProductName(item?.product) || 'Item', qty: si.qty };
   });
 
   return (
@@ -696,7 +697,7 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
           return (
             <div key={item.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'0.75rem', flexWrap:'wrap'}}>
               <div>
-                <div className="font-semibold text-sm">{item.product?.name || 'Item'}</div>
+                <div className="font-semibold text-sm">{staffProductName(item.product) || 'Item'}</div>
                 <div className="text-xs text-muted">{max} remaining of {item.qty}</div>
               </div>
               <input

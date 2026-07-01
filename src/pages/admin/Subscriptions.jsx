@@ -11,6 +11,7 @@ import {
   effectiveStatus, latestSubFor, addOneYear,
 } from '../../lib/subscriptions';
 import { orderRef } from '../../lib/orders';
+import { staffProductName } from '../../lib/productName';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
@@ -57,7 +58,7 @@ export default function Subscriptions() {
           item:bridgethings_order_items(
             id, qty,
             order:bridgethings_orders(id, partner_id, status, delivered_date, partner_po_number),
-            product:bridgethings_products(id, name, subscription_price)
+            product:bridgethings_products(id, name, internal_name, subscription_price)
           )
         `)
         .order('created_at', { ascending: false });
@@ -103,7 +104,7 @@ export default function Subscriptions() {
       if (filter !== 'all' && r.status !== filter) return false;
       if (!term) return true;
       const hay = [
-        r.unit?.serial_number, r.unit?.sim, r.product?.name,
+        r.unit?.serial_number, r.unit?.sim, staffProductName(r.product),
         r.partner?.name, r.partner?.company_name, r.unit?.id,
       ].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
@@ -219,7 +220,7 @@ export default function Subscriptions() {
                   return (
                     <tr key={r.unit.id} style={isPending ? {background:'rgba(59,130,246,0.04)'} : undefined}>
                       <td className="text-sm">{r.partner?.name || r.partner?.company_name || '—'}</td>
-                      <td className="text-sm font-semibold">{r.product?.name || '—'}</td>
+                      <td className="text-sm font-semibold">{staffProductName(r.product) || '—'}</td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.serial_number || '—'}</code></td>
                       <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
@@ -382,7 +383,7 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
 
           <div style={{padding:'1rem', background:'var(--bg)', borderRadius:'8px', marginBottom:'1.25rem'}}>
             <div className="text-xs text-muted">Device</div>
-            <div className="font-semibold">{row.product?.name || 'Unknown product'}</div>
+            <div className="font-semibold">{staffProductName(row.product) || 'Unknown product'}</div>
             <div className="text-sm" style={{marginTop:'0.25rem'}}>
               Serial: <code>{row.unit.serial_number || '—'}</code>
               {row.unit.sim && <> &middot; SIM: <code>{row.unit.sim}</code></>}

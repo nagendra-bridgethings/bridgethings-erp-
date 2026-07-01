@@ -6,6 +6,7 @@
 // "Recent POs" section so both entry points open the same view.
 import { useState } from 'react';
 import { confirmOrder, rejectOrder, proposeDeliveryDate, orderRef } from '../lib/orders';
+import { staffProductName } from '../lib/productName';
 import { IGST_LABEL } from '../lib/tax';
 import { useToast } from '../lib/toast';
 
@@ -39,6 +40,7 @@ export default function POReviewModal({ order, partner, onClose, onConfirmed, on
     (s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0),
     0,
   );
+  const cableTotal = (order.items || []).reduce((s, i) => s + (Number(i.cable_charge) || 0), 0);
   const shipping = Number(order.shipping_cost) || 0;
   const tax      = Number(order.tax_amount)    || 0;
 
@@ -206,7 +208,7 @@ export default function POReviewModal({ order, partner, onClose, onConfirmed, on
             {(order.items || []).map(item => (
               <div key={item.id} style={{background:'var(--card)', border:'1px solid var(--border)', borderRadius:'8px', padding:'0.85rem 1rem'}}>
                 <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
-                  <div className="font-semibold">{item.product?.name || 'Unknown product'}</div>
+                  <div className="font-semibold">{staffProductName(item.product) || 'Unknown product'}</div>
                   <div className="text-sm font-semibold" style={{color:'var(--primary)'}}>Qty: {item.qty}</div>
                 </div>
                 {item.notes && <div className="text-xs" style={{color:'var(--warning)', marginTop:'0.4rem'}}>Partner Note: {item.notes}</div>}
@@ -219,6 +221,11 @@ export default function POReviewModal({ order, partner, onClose, onConfirmed, on
             <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.85rem', color:'var(--text-muted)'}}>
               <span>Items subtotal</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(itemsSubtotal)}</span>
             </div>
+            {cableTotal > 0 && (
+              <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.85rem', color:'var(--text-muted)'}}>
+                <span>Extra cable</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(cableTotal)}</span>
+              </div>
+            )}
             <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.85rem', color:'var(--text-muted)'}}>
               <span>Shipping{order.delivery_method ? ` (${order.delivery_method})` : ''}</span>
               <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(shipping)}</span>

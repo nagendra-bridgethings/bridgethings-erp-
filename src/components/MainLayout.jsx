@@ -17,7 +17,6 @@ const buildAdminNav = (prefix) => [
   { to: `${prefix}/fulfillment`, label: 'Orders' },
   { to: '/admin/subscriptions',  label: 'Subscriptions', roles: ['admin'] },
   { to: '/admin/partners',       label: 'Channel Partners', roles: ['admin'] },
-  { to: '/admin/audit',          label: 'Audit Logs', roles: ['admin'] },
 ];
 const partnerNav = [
   { to: '/partner',          label: 'Dashboard' },

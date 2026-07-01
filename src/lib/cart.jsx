@@ -68,14 +68,16 @@ export function CartProvider({ children }) {
       return [...prev, {
         product_id: product.id,
         product: {
-          id:         product.id,
-          name:       product.name,
-          base_price: product.base_price,
-          features:   product.features || [],
-          image_url:  product.image_url,
+          id:              product.id,
+          name:            product.name,
+          base_price:      product.base_price,
+          features:        product.features || [],
+          image_url:       product.image_url,
+          cable_supported: !!product.cable_supported,
         },
         qty: addQty,
         notes: '',
+        extra_cable_m: 0,
       }];
     });
   }, []);

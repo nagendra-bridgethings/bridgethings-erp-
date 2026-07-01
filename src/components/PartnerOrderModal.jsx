@@ -7,6 +7,7 @@ import { acceptDeliveryCounter, declineDeliveryCounter, saveShipTo, derivePartne
 import { DOC_LABELS, EWAY_BILL_THRESHOLD, requiredDocsForShipment, useLegacyOrderDocs, useShipmentDocs, uploadShipmentDoc, getPartnerDocUrl } from '../lib/partnerDocs';
 import { usePaymentsForOrder, PAYMENT_METHOD_LABEL, PAYMENT_METHODS, submitPaymentProof, getPaymentSlipUrl } from '../lib/payments';
 import { useAuth } from '../lib/auth';
+import { productNameForRole } from '../lib/productName';
 import { useShipmentsForOrder } from '../lib/shipments';
 import { IGST_LABEL } from '../lib/tax';
 import { useToast } from '../lib/toast';
@@ -87,6 +88,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
     (s, i) => s + (Number(i.qty) || 0) * (Number(i.unit_price) || 0),
     0,
   );
+  const cableTotal = (order.items || []).reduce((s, i) => s + (Number(i.cable_charge) || 0), 0);
   const shipping = Number(order.shipping_cost) || 0;
   const tax      = Number(order.tax_amount)    || 0;
 
@@ -222,6 +224,7 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
             <DetailsTab
               order={order}
               itemsSubtotal={itemsSubtotal}
+              cableTotal={cableTotal}
               shipping={shipping}
               tax={tax}
               unitsByItem={unitsByItem}
@@ -250,7 +253,8 @@ export default function PartnerOrderModal({ order, onClose, onChanged, detailsOn
   );
 }
 
-function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, deliveredByItem = {}, showUnits = true }) {
+function DetailsTab({ order, itemsSubtotal, cableTotal = 0, shipping, tax, unitsByItem, deliveredByItem = {}, showUnits = true }) {
+  const { user } = useAuth();
   return (
     <>
       <h4 style={{fontSize:'0.85rem', fontWeight:700, color:'var(--text-muted)', textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.5rem'}}>
@@ -271,7 +275,7 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, delivere
             <div key={item.id} style={{background:'var(--bg)', border:'1px solid var(--border)', borderRadius:'8px', padding:'1rem'}}>
               <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'1rem', flexWrap:'wrap'}}>
                 <div style={{display:'flex', alignItems:'center', gap:'0.5rem', flexWrap:'wrap'}}>
-                  <div className="font-semibold">{item.product?.name || 'Unknown product'}</div>
+                  <div className="font-semibold">{productNameForRole(item.product, user?.role) || 'Unknown product'}</div>
                   {showUnits && (() => {
                     // Show one badge per production state present on this
                     // item's units, so the partner can see partial progress
@@ -343,6 +347,11 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, delivere
                 </div>
               </div>
               {item.notes && <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>Note: {item.notes}</div>}
+              {Number(item.cable_charge) > 0 && (
+                <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>
+                  Extra cable: {item.extra_cable_m} m/unit · {fmtINR(item.cable_charge)}
+                </div>
+              )}
               {showUnits && units.length > 0 && (
                 <div style={{marginTop:'0.75rem'}}>
                   <div className="text-xs text-muted" style={{textTransform:'uppercase', letterSpacing:'0.05em', marginBottom:'0.4rem'}}>
@@ -398,13 +407,18 @@ function DetailsTab({ order, itemsSubtotal, shipping, tax, unitsByItem, delivere
         <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
           <span>Items subtotal</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(itemsSubtotal)}</span>
         </div>
+        {cableTotal > 0 && (
+          <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
+            <span>Extra cable</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(cableTotal)}</span>
+          </div>
+        )}
         <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
           <span>Shipping{order.delivery_method ? ` (${order.delivery_method})` : ''}</span>
           <span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(shipping)}</span>
         </div>
         <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', borderTop:'1px dashed var(--border)', paddingTop:'0.4rem', marginTop:'0.2rem'}}>
           <span style={{fontWeight:600}}>Total before IGST</span>
-          <span style={{fontWeight:600}}>{fmtINR(itemsSubtotal + shipping)}</span>
+          <span style={{fontWeight:600}}>{fmtINR(itemsSubtotal + cableTotal + shipping)}</span>
         </div>
         <div style={{display:'flex', justifyContent:'space-between', fontSize:'0.9rem', color:'var(--text-muted)'}}>
           <span>{IGST_LABEL}</span><span style={{fontWeight:600, color:'var(--text)'}}>{fmtINR(tax)}</span>
@@ -696,7 +710,7 @@ function PartnerShipmentsList({ order }) {
         const delivered  = Boolean(s.delivered_date);
         const itemSummary = (s.items || []).map(si => {
           const item = items.find(it => it.id === si.order_item_id);
-          return { name: item?.product?.name || 'Item', qty: si.qty };
+          return { name: productNameForRole(item?.product, user?.role) || 'Item', qty: si.qty };
         });
         return (
           <div key={s.id} style={{border:'1px solid var(--border)', borderRadius:'8px', padding:'0.85rem 1rem'}}>
