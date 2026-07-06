@@ -9,7 +9,7 @@ import { supabase } from '../../lib/supabase';
 import { useToast } from '../../lib/toast';
 import {
   useUnitSubscriptions, requestSubscriptions,
-  effectiveStatus, daysRemaining, latestSubFor,
+  effectiveStatus, daysRemaining, latestSubFor, coverageSubFor,
 } from '../../lib/subscriptions';
 import { orderRef } from '../../lib/orders';
 
@@ -89,11 +89,20 @@ export default function PartnerDevices() {
   }, [subs]);
 
   const rows = useMemo(() => units.map(u => {
-    const latest = latestSubFor(subsByUnit[u.id] || []);
+    const unitSubs = subsByUnit[u.id] || [];
+    // Cancelled rows never represent the device here: a device whose subs
+    // are ALL cancelled must derive 'none' (selectable for a fresh request)
+    // instead of a dead-end 'Cancelled' badge that blocks re-requesting.
+    const latest = latestSubFor(unitSubs.filter(s => s.status !== 'cancelled'));
+    // Paid coverage (ignores pending placeholders) — drives credentials
+    // access and expiry display so a renewal request doesn't hide a
+    // still-valid subscription.
+    const coverage = coverageSubFor(unitSubs);
     const price  = Number(u.item?.product?.subscription_price) || 0;
     return {
       unit: u,
       latest,
+      coverage,
       status: effectiveStatus(latest),
       price,
     };
@@ -275,10 +284,14 @@ export default function PartnerDevices() {
               </thead>
               <tbody>
                 {filtered.map(r => {
-                  const days = daysRemaining(r.latest);
+                  // Expiry + credential access derive from PAID coverage, not
+                  // the newest row — a pending renewal request must not hide
+                  // dates/credentials of a subscription that's still valid.
+                  const coverageStatus = effectiveStatus(r.coverage);
+                  const days = daysRemaining(r.coverage || r.latest);
                   const selectable = SELECTABLE_STATUSES.includes(r.status);
                   const hasCreds   = Boolean(r.unit.dashboard_username || r.unit.dashboard_password);
-                  const canViewCreds = hasCreds && (r.status === 'active' || r.status === 'expiring_soon');
+                  const canViewCreds = hasCreds && (coverageStatus === 'active' || coverageStatus === 'expiring_soon');
                   return (
                     <tr key={r.unit.id}>
                       <td>
@@ -296,7 +309,7 @@ export default function PartnerDevices() {
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim_number || '—'}</code></td>
                       <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
-                      <td className="text-sm">{fmtDate(r.latest?.end_date)}</td>
+                      <td className="text-sm">{fmtDate((r.coverage || r.latest)?.end_date)}</td>
                       <td className="text-sm">
                         {days == null ? '—' : days < 0 ? `${Math.abs(days)} ago` : days}
                       </td>

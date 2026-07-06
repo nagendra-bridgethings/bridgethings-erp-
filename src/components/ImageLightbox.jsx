@@ -31,7 +31,11 @@ export default function ImageLightbox({ src, alt, onClose }) {
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
       else if (e.key === '+' || e.key === '=') setScale(s => Math.min(MAX_SCALE, s + STEP));
-      else if (e.key === '-' || e.key === '_') setScale(s => Math.max(MIN_SCALE, s - STEP));
+      else if (e.key === '-' || e.key === '_') setScale(s => {
+        const next = Math.max(MIN_SCALE, s - STEP);
+        if (next === MIN_SCALE) setOffset({ x: 0, y: 0 }); // recentre: panning is disabled at 100%
+        return next;
+      });
       else if (e.key === '0')                  { setScale(1); setOffset({ x: 0, y: 0 }); }
     };
     window.addEventListener('keydown', onKey);
@@ -69,7 +73,13 @@ export default function ImageLightbox({ src, alt, onClose }) {
   const handleMouseUp = () => { dragRef.current = null; };
 
   const zoomIn  = () => setScale(s => Math.min(MAX_SCALE, s + STEP));
-  const zoomOut = () => setScale(s => Math.max(MIN_SCALE, s - STEP));
+  // Mirror the wheel path: snap the pan offset back at 100%, otherwise the
+  // image is stranded off-centre with panning disabled (scale <= 1).
+  const zoomOut = () => setScale(s => {
+    const next = Math.max(MIN_SCALE, s - STEP);
+    if (next === MIN_SCALE) setOffset({ x: 0, y: 0 });
+    return next;
+  });
   const reset   = () => { setScale(1); setOffset({ x: 0, y: 0 }); };
 
   return (

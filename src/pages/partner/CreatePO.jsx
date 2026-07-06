@@ -23,6 +23,9 @@ const applyDiscount = (basePrice, discountPercent) => {
 
 const fmtINR = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
+// Local-time YYYY-MM-DD — toISOString() gives the UTC day, which lets IST
+// users pick "yesterday" as the requested dispatch date after midnight.
+const todayLocal = () => new Date().toLocaleDateString('en-CA');
 const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
 export default function CreatePO() {
@@ -109,6 +112,11 @@ export default function CreatePO() {
   const openSubmit = () => {
     if (items.length === 0) { addToast('Add at least one product to the PO', 'error'); return; }
     if (!selectedCourier) { addToast('Please select a delivery partner', 'error'); return; }
+    // The input's `min` doesn't block typed dates — validate at submit so a
+    // past date never reaches the admin queue (confirm would lock it in).
+    if (requestedDeliveryDate && requestedDeliveryDate < todayLocal()) {
+      addToast('Requested dispatch date cannot be in the past', 'error'); return;
+    }
     if (!user?.supabaseId) { addToast('Cannot submit: not signed in', 'error'); return; }
     setPoNumber('');
     setShowPoModal(true);
@@ -303,7 +311,7 @@ export default function CreatePO() {
                   type="date"
                   className="form-input po-date"
                   value={requestedDeliveryDate}
-                  min={new Date().toISOString().slice(0, 10)}
+                  min={todayLocal()}
                   onChange={e => setRequestedDeliveryDate(e.target.value)}
                   style={{maxWidth:'100%'}}
                 />
@@ -420,7 +428,11 @@ export default function CreatePO() {
         ) : recentOrders.length === 0 ? (
           <div className="empty-state"><p>No previous purchase orders. Submit one above to start tracking.</p></div>
         ) : filteredOrders.length === 0 ? (
-          <div className="empty-state"><p>No orders match "{poSearch}".</p></div>
+          <div className="empty-state">
+            {/* An empty TAB isn't a failed search — only blame the search
+                term when one was actually typed. */}
+            <p>{poSearch.trim() ? `No orders match "${poSearch}".` : 'No orders in this category yet.'}</p>
+          </div>
         ) : (
           <div className="table-wrap">
             <table>

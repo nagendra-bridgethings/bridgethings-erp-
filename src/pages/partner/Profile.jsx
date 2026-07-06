@@ -24,6 +24,26 @@ export default function Profile() {
   const [editing, setEditing] = useState(false);
   const [form, setForm]       = useState(() => buildForm(user));
 
+  // Re-sync when the auth profile hydrates AFTER mount (stub-role cache
+  // hydration fills name/address in the background). Without this, a
+  // reload on this page shows blank fields — and saving that blank form
+  // would null out the partner's entire profile. Gated on !editing so
+  // in-progress edits are never clobbered. Uses the render-time
+  // "adjust state when props change" pattern (React docs) instead of an
+  // effect; keyed on the field values since `user` is a fresh object
+  // every auth render.
+  const userKey = JSON.stringify(buildForm(user));
+  const [syncedUserKey, setSyncedUserKey] = useState(userKey);
+  if (!editing && userKey !== syncedUserKey) {
+    setSyncedUserKey(userKey);
+    setForm(buildForm(user));
+  }
+
+  // Until the full profile row is loaded (stub hydration has no row id),
+  // editing must stay disabled — a Save from a stub-built form would
+  // overwrite real data with empty strings.
+  const profileHydrated = Boolean(user?.id);
+
   const update = (field, value) => setForm(prev => ({ ...prev, [field]: value }));
 
   const handleSave = async () => {
@@ -93,7 +113,12 @@ export default function Profile() {
           <div className="card-header">
             <h2>Account Details</h2>
             {!editing && (
-              <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>
+              <button
+                className="btn btn-secondary btn-sm"
+                disabled={!profileHydrated}
+                title={profileHydrated ? undefined : 'Loading your profile...'}
+                onClick={() => setEditing(true)}
+              >
                 Edit
               </button>
             )}

@@ -31,6 +31,9 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
 
   const remaining = computeRemainingByItem(items || [], shipments);
   const anythingRemaining = Object.values(remaining).some(r => r.remaining > 0);
+  // Every ordered unit has actually gone out (AWB/delivered), not just packed.
+  const allDispatched = (items || []).length > 0 &&
+    (items || []).every(it => (remaining[it.id]?.dispatched || 0) >= (remaining[it.id]?.ordered || 0));
 
   const handleMarkDelivered = async (shipmentId) => {
     setBusyId(shipmentId);
@@ -146,22 +149,31 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
         ) : (
           <div style={{display:'flex', flexDirection:'column', gap:'0.3rem'}}>
             {items.map(item => {
-              const r = remaining[item.id] || { ordered: 0, shipped: 0, remaining: 0 };
-              const pct = r.ordered > 0 ? Math.round((r.shipped / r.ordered) * 100) : 0;
-              const done = r.remaining <= 0;
+              const r = remaining[item.id] || { ordered: 0, shipped: 0, dispatched: 0, remaining: 0 };
+              // Progress = ACTUALLY shipped (dispatched), not merely packed.
+              const pct  = r.ordered > 0 ? Math.round((r.dispatched / r.ordered) * 100) : 0;
+              const done = r.dispatched >= r.ordered && r.ordered > 0;
+              // Packed into a parcel that hasn't gone out yet (awaiting AWB/docs).
+              const packed  = Math.max(0, r.shipped - r.dispatched);
               const counts  = unitCountsByItem[item.id] || {};
-              const ready   = counts.ready_to_dispatch || 0;
+              // ready_to_dispatch units include the ones packed into plan
+              // parcels (they stay ready until the AWB is entered), so subtract
+              // those to show only units not yet in any parcel.
+              const ready   = Math.max(0, (counts.ready_to_dispatch || 0) - packed);
               const withOps = (counts.hold || 0) + (counts.production || 0) + (counts.sent_back || 0);
               return (
                 <div key={item.id} style={{display:'flex', justifyContent:'space-between', gap:'0.75rem', flexWrap:'wrap', fontSize:'0.85rem'}}>
                   <span className="font-semibold">{staffProductName(item.product) || 'Unknown product'}</span>
                   <span>
-                    <span style={{color: done ? 'var(--success)' : 'var(--text)'}}>{r.shipped}</span>
+                    <span style={{color: done ? 'var(--success)' : 'var(--text)'}}>{r.dispatched}</span>
                     {' / '}
                     <span className="text-muted">{r.ordered}</span>
-                    {' '}<span className="text-xs text-muted">({pct}%)</span>
+                    {' '}<span className="text-xs text-muted">({pct}% shipped)</span>
+                    {packed > 0 && (
+                      <span className="badge badge-purple" style={{marginLeft:'0.5rem', fontSize:'0.7rem'}}>{packed} awaiting AWB</span>
+                    )}
                     {ready > 0 && (
-                      <span className="badge badge-warning" style={{marginLeft:'0.5rem', fontSize:'0.7rem'}}>{ready} to ship</span>
+                      <span className="badge badge-warning" style={{marginLeft:'0.35rem', fontSize:'0.7rem'}}>{ready} to ship</span>
                     )}
                     {withOps > 0 && (
                       <span className="badge badge-info" style={{marginLeft:'0.25rem', fontSize:'0.7rem'}}>{withOps} with ops</span>
@@ -179,7 +191,7 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
         {loading && <div className="text-sm text-muted">Loading shipments...</div>}
         {!loading && shipments.length === 0 && (
           <div className="text-sm text-muted" style={{padding:'0.5rem'}}>
-            No shipments yet. Click "Add Shipment" when the first parcel goes out — you can request the partner's docs from inside the shipment card after it's created.
+            No shipments yet. Click "Add Shipment" when the first parcel goes out — for drop-ship orders you pick which documents to request from the partner right in that form.
           </div>
         )}
         {shipments.map((s, idx) => (
@@ -239,6 +251,10 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
         // requests the matching docs from the partner from within that
         // shipment's card. Any legacy order-level docs (pre-migration)
         // surface inside the first shipment's docs panel.
+        // Gate on !loading: before the shipments query resolves, `remaining`
+        // is computed from an empty list — a fully-shipped order would
+        // momentarily offer "+ Add Shipment" with full quantities.
+        if (loading) return null;
         return (
           <>
             {anythingRemaining ? (
@@ -259,9 +275,14 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
                   + Add Shipment
                 </button>
               )
-            ) : (
+            ) : allDispatched ? (
               <div className="text-sm" style={{marginTop:'1rem', color:'var(--success)'}}>
                 All ordered quantities have been shipped. ✓
+              </div>
+            ) : (
+              <div className="text-sm" style={{marginTop:'1rem', color:'var(--text-muted)'}}>
+                All units are packed into parcels. Enter each parcel's AWB —
+                once the partner's documents are in — to mark it shipped.
               </div>
             )}
           </>
@@ -276,11 +297,11 @@ const ALL_DOC_TYPES = ['invoice', 'dc', 'eway_bill'];
 // Per-shipment docs panel — lives inside each ShipmentCard. Read-only
 // view of whatever docs were requested when the shipment was created
 // (via the NewShipmentForm's integrated picker) plus the partner's
-// uploads as they land. Dispatch CANNOT request more docs from here —
-// the request UI is intentionally only available inside the "Add
-// Shipment" form, so creating-a-shipment-and-requesting-its-docs is
-// one atomic action and existing shipments stay clutter-free.
-function ShipmentDocsBlock({ shipment, order, isFirstShipment = false }) {
+// uploads as they land. For drop-ship shipments whose doc request never
+// happened (auto-request failed, or dispatch chose "save only"), a
+// "Request documents" action renders here as the recovery path.
+function ShipmentDocsBlock({ shipment, order, isFirstShipment = false, onChanged }) {
+  const { addToast } = useToast();
   const { docs, loading } = useShipmentDocs(shipment.id);
   // Load legacy order-level docs only when this is the first shipment —
   // those uploads pre-date per-shipment tracking and conceptually
@@ -292,12 +313,31 @@ function ShipmentDocsBlock({ shipment, order, isFirstShipment = false }) {
   const requestedTypes = shipment.requested_doc_types?.length
     ? shipment.requested_doc_types
     : [];
+  // Drop-ship shipment with no docs requested yet → offer the request UI.
+  const canRequest = !!order?.ship_to_is_different && !requested && !submitted;
+  const [reqPicks, setReqPicks] = useState(() => new Set(ALL_DOC_TYPES));
+  const [requesting, setRequesting] = useState(false);
 
   const docRows = Object.values(docs);
 
-  // Nothing requested for this shipment AND no legacy docs to show —
+  const handleRequestDocs = async () => {
+    if (reqPicks.size === 0) { addToast('Tick at least one document to request', 'error'); return; }
+    setRequesting(true);
+    try {
+      await requestShipmentDocs(shipment.id, Array.from(reqPicks));
+      addToast('Documents requested from partner', 'success');
+      if (onChanged) await onChanged();
+    } catch (err) {
+      console.error('[shipments] doc request failed:', err);
+      addToast(err.message || 'Failed to request documents', 'error');
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  // Nothing requested, nothing requestable, and no legacy docs to show —
   // hide the whole panel so the shipment card stays tight.
-  if (!requested && !submitted && !(isFirstShipment && legacyDocs.length > 0)) {
+  if (!requested && !submitted && !canRequest && !(isFirstShipment && legacyDocs.length > 0)) {
     return null;
   }
 
@@ -349,6 +389,36 @@ function ShipmentDocsBlock({ shipment, order, isFirstShipment = false }) {
           <div className="text-muted" style={{marginTop:'0.2rem'}}>
             Partner has been asked to upload: {requestedTypes.map(t => DOC_LABELS[t] || t).join(', ')}.
           </div>
+        </div>
+      )}
+
+      {/* Recovery path: drop-ship shipment with no doc request on record
+          (auto-request failed, or dispatch saved without requesting). */}
+      {canRequest && (
+        <div style={{padding:'0.5rem 0.75rem', background:'rgba(245,158,11,0.08)', border:'1px solid var(--warning)', borderRadius:'6px', fontSize:'0.85rem', marginBottom:'0.5rem'}}>
+          <div className="font-semibold" style={{color:'var(--warning)'}}>No documents requested yet</div>
+          <div className="text-muted" style={{margin:'0.2rem 0 0.5rem'}}>
+            This is a drop-ship parcel — the partner hasn&apos;t been asked for shipping documents.
+          </div>
+          <div style={{display:'flex', gap:'0.85rem', flexWrap:'wrap', marginBottom:'0.5rem'}}>
+            {ALL_DOC_TYPES.map(docType => (
+              <label key={docType} style={{display:'inline-flex', alignItems:'center', gap:'0.3rem', cursor:'pointer'}}>
+                <input
+                  type="checkbox"
+                  checked={reqPicks.has(docType)}
+                  onChange={() => setReqPicks(prev => {
+                    const next = new Set(prev);
+                    if (next.has(docType)) next.delete(docType); else next.add(docType);
+                    return next;
+                  })}
+                />
+                <span className="text-sm">{DOC_LABELS[docType] || docType}</span>
+              </label>
+            ))}
+          </div>
+          <button type="button" className="btn btn-primary btn-sm" disabled={requesting} onClick={handleRequestDocs}>
+            {requesting ? 'Requesting...' : 'Request documents'}
+          </button>
         </div>
       )}
       {/* Uploaded docs for THIS shipment — Download forces browser save
@@ -436,8 +506,11 @@ function ShipmentCard({ shipment, index, total, items, order, busy, onDeliver, o
         <div className="font-semibold text-sm" style={{color:'var(--primary)'}}>
           Shipment {index} of {total}
           {' '}
-          <span className={`badge ${delivered ? 'badge-success' : 'badge-info'}`} style={{marginLeft:'0.4rem'}}>
-            {delivered ? 'Delivered' : 'In transit'}
+          {/* A parcel is only "in transit" once it has an AWB (handed to the
+              courier). Before that it's a plan — packed & awaiting docs/AWB —
+              so show "Ready to ship" rather than a misleading "In transit". */}
+          <span className={`badge ${delivered ? 'badge-success' : hasTracking ? 'badge-info' : 'badge-warning'}`} style={{marginLeft:'0.4rem'}}>
+            {delivered ? 'Delivered' : hasTracking ? 'In transit' : 'Ready to ship'}
           </span>
         </div>
         <div style={{display:'flex', gap:'0.4rem'}}>
@@ -574,6 +647,7 @@ function ShipmentCard({ shipment, index, total, items, order, busy, onDeliver, o
           shipment={shipment}
           order={order}
           isFirstShipment={index === 1}
+          onChanged={onChanged}
         />
       )}
     </div>
@@ -589,6 +663,25 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
     return acc;
   }, {});
   const [qtys, setQtys]     = useState(initial);
+  // Re-clamp if `remaining` shrinks while the form is open (another
+  // session shipped, or the shipments list refreshed) — otherwise a stale
+  // pre-filled qty survives in a disabled input and Save submits it.
+  // Render-time "adjust state when props change" pattern, keyed on the
+  // remaining values (the prop object itself is rebuilt every render).
+  const remainingKey = JSON.stringify(Object.keys(remaining).sort().map(id => [id, remaining[id]?.remaining || 0]));
+  const [syncedRemainingKey, setSyncedRemainingKey] = useState(remainingKey);
+  if (remainingKey !== syncedRemainingKey) {
+    setSyncedRemainingKey(remainingKey);
+    setQtys(prev => {
+      const next = { ...prev };
+      let changed = false;
+      for (const id of Object.keys(next)) {
+        const max = remaining[id]?.remaining || 0;
+        if (next[id] > max) { next[id] = max; changed = true; }
+      }
+      return changed ? next : prev;
+    });
+  }
   const [courier, setCourier] = useState(order?.delivery_method || COURIERS[0]?.name || '');
   const [trackingNumber, setTrackingNumber] = useState('');
   const [shippedDate, setShippedDate]       = useState(today());
@@ -639,9 +732,20 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
   // only and lets dispatch request docs later from inside the card.
   const persistShipment = async ({ requestDocs }) => {
     if (totalQty <= 0) { addToast('Add at least one item to the shipment', 'error'); return; }
+    // Belt & braces against a stale form: never submit more than remaining.
+    const over = Object.entries(qtys).find(([id, q]) => Number(q) > (remaining[id]?.remaining || 0));
+    if (over) { addToast('A quantity exceeds what remains unshipped — please review the items', 'error'); return; }
     if (!courier.trim()) { addToast('Pick a courier', 'error'); return; }
     if (requestDocs && (!dropShip || docPicks.size === 0)) {
       addToast('Tick at least one document to request', 'error');
+      return;
+    }
+    // Requesting docs means the parcel hasn't gone out yet — so it can't
+    // also be marked shipped/delivered in the same step, or the partner
+    // gets contradictory "it shipped" + "we still need your documents"
+    // emails. Force the dispatcher to pick one.
+    if (requestDocs && (trackingNumber.trim() || markDelivered)) {
+      addToast('This parcel is still waiting on partner documents, so it can’t be marked shipped or delivered yet. Clear the tracking number (and "Already delivered"), or save without requesting documents.', 'error');
       return;
     }
     setSaving(true);
@@ -659,24 +763,31 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
       });
 
       let docsRequested = 0;
+      let docsFailed = false;
       if (requestDocs && newShipment?.id && docPicks.size > 0) {
         try {
           await requestShipmentDocs(newShipment.id, Array.from(docPicks));
           docsRequested = docPicks.size;
         } catch (docErr) {
           // Shipment is saved either way — surface the doc failure so
-          // dispatch knows to request manually from inside the card.
+          // dispatch knows to retry from the "Request documents" button
+          // inside the shipment card.
           console.error('[shipments] auto-request docs failed:', docErr);
-          addToast('Shipment saved, but the doc request failed. You can request from inside the shipment card.', 'error');
+          docsFailed = true;
+          addToast('Shipment saved, but the document request failed. Retry it from the "Request documents" button on the shipment card.', 'error');
         }
       }
 
-      addToast(
-        docsRequested > 0
-          ? `Shipment recorded and ${docsRequested} document(s) requested from partner`
-          : 'Shipment recorded',
-        'success',
-      );
+      // Don't stack a green success toast on top of the doc-failure toast —
+      // it reads as "all good" and masks the failure.
+      if (!docsFailed) {
+        addToast(
+          docsRequested > 0
+            ? `Shipment recorded and ${docsRequested} document(s) requested from partner`
+            : 'Shipment recorded',
+          'success',
+        );
+      }
       await onSaved();
     } catch (err) {
       console.error('[shipments] create failed:', err);

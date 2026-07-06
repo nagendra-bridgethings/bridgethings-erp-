@@ -22,8 +22,12 @@ const today   = () => new Date().toISOString().slice(0, 10);
 export default function Finance() {
   // Accountant only sees orders the admin has already accepted (active or
   // completed). Pending POs and rejected ones live on the admin side.
+  // limit: null — revenue/outstanding totals and the pending-payments queue
+  // must cover every order; the default 100-row cap silently under-reports
+  // and hides older unpaid orders from the accountant.
   const { orders, loading, reload } = useOrders({
     includeStatuses: ['active', 'completed'],
+    limit: null,
   });
   const [activeTab, setActiveTab] = useState('verify');
   const [pendingVerifyCount, setPendingVerifyCount] = useState(0);
@@ -175,7 +179,14 @@ export default function Finance() {
                 </div>
 
                 {isHistoryOpen && (
-                  <PaymentsTable orderId={order.id} canEdit onReload={reload} />
+                  /* Also refresh the Pending Verification badge — deleting a
+                     pending_verification row from here would otherwise leave
+                     the tab count stale until the next verify/reject. */
+                  <PaymentsTable
+                    orderId={order.id}
+                    canEdit
+                    onReload={async () => { await reload(); await loadPendingVerifyCount(); }}
+                  />
                 )}
               </div>
             );
@@ -518,11 +529,20 @@ function RejectPaymentModal({ row, onClose, onRejected }) {
 
 // Renders a "View" link that mints a signed URL on click. Used by both
 // the pending verification list above and the per-order payments table.
+// The window MUST open synchronously inside the click gesture — opening
+// after the await gets silently killed by popup blockers (Safari default).
 function SlipLink({ path }) {
   const handleClick = async (e) => {
     e.preventDefault();
+    const w = window.open('', '_blank'); // synchronous: inside the user gesture
+    if (w) w.opener = null;              // noopener equivalent that keeps the handle
     const url = await getPaymentSlipUrl(path);
-    if (url) window.open(url, '_blank', 'noopener');
+    if (url) {
+      if (w) w.location = url;
+      else window.open(url, '_blank', 'noopener'); // hard-blocked fallback attempt
+    } else if (w) {
+      w.close();
+    }
   };
   return <a href="#" onClick={handleClick} style={{color:'var(--primary)'}}>View</a>;
 }

@@ -33,6 +33,10 @@ export default function ProductsPage() {
   const [deletingId, setDeletingId] = useState(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef(null);
+  // Upload-session token. Bumped whenever the modal opens/closes or switches
+  // product, so an upload still in flight for the PREVIOUS form can never
+  // append its image into the form that's open now (cross-product leak).
+  const uploadSessionRef = useRef(0);
   // URL passed to <ImageLightbox> when admin clicks an image to verify it.
   const [lightboxSrc, setLightboxSrc] = useState(null);
   // Mirrors the partner's gallery swap behaviour: clicking a thumbnail
@@ -47,6 +51,8 @@ export default function ProductsPage() {
   const handleImageUpload = async (fileList) => {
     if (!fileList?.length) return;
     const files = Array.from(fileList);
+    const session = uploadSessionRef.current;
+    let uploaded = 0;
     for (const file of files) {
       if (!file.type.startsWith('image/')) {
         addToast(`Skipped "${file.name}" — not an image`, 'error');
@@ -64,10 +70,15 @@ export default function ProductsPage() {
           .upload(path, file, { contentType: file.type, upsert: false });
         if (uploadErr) throw uploadErr;
 
+        // Modal closed / different product opened while we were uploading —
+        // don't append into someone else's form.
+        if (uploadSessionRef.current !== session) return;
+
         const { data } = supabase.storage
           .from(PRODUCT_IMAGES_BUCKET)
           .getPublicUrl(path);
         setForm(prev => ({ ...prev, image_urls: [...(prev.image_urls || []), data.publicUrl] }));
+        uploaded++;
       } catch (err) {
         console.error('[products] image upload failed:', err);
         addToast(err.message || `Failed to upload "${file.name}"`, 'error');
@@ -75,7 +86,13 @@ export default function ProductsPage() {
         setUploading(false);
       }
     }
-    addToast('Images uploaded', 'success');
+    if (uploadSessionRef.current !== session) return;
+    // Only claim success when something actually landed — "Images uploaded"
+    // after every file was skipped/failed leads to products going live
+    // with no photo.
+    if (uploaded > 0) {
+      addToast(uploaded === files.length ? 'Images uploaded' : `${uploaded} of ${files.length} images uploaded`, 'success');
+    }
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -122,8 +139,10 @@ export default function ProductsPage() {
     `${p.name || ''} ${p.internal_name || ''}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  const openNew = () => { setForm(EMPTY); setEditing(null); setShowModal(true); };
+  const closeModal = () => { uploadSessionRef.current++; setShowModal(false); };
+  const openNew = () => { uploadSessionRef.current++; setForm(EMPTY); setEditing(null); setShowModal(true); };
   const openEdit = p => {
+    uploadSessionRef.current++;
     // Hydrate the form's image_urls from the new column. Fall back to
     // the legacy image_url for products created before the multi-image
     // migration ran, so admins can still edit and add more.
@@ -189,7 +208,7 @@ export default function ProductsPage() {
         setProducts(prev => [data, ...prev]);
         addToast('Product added successfully', 'success');
       }
-      setShowModal(false);
+      closeModal();
     } catch (err) {
       console.error('[products] save failed:', err);
       addToast(err.message || 'Failed to save product', 'error');
@@ -274,11 +293,11 @@ export default function ProductsPage() {
 
       {/* Add/Edit Modal */}
       {showModal && (
-        <div className="modal-overlay" onClick={() => !saving && setShowModal(false)}>
+        <div className="modal-overlay" onClick={() => !saving && closeModal()}>
           <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{editing ? 'Edit Product' : 'Add New Product'}</h3>
-              <button className="modal-close" onClick={() => setShowModal(false)}>✕</button>
+              <button className="modal-close" onClick={closeModal}>✕</button>
             </div>
             <div className="modal-body">
               <div className="form-grid">
@@ -408,7 +427,7 @@ export default function ProductsPage() {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" disabled={saving} onClick={() => setShowModal(false)}>Cancel</button>
+              <button className="btn btn-secondary" disabled={saving} onClick={closeModal}>Cancel</button>
               <button className="btn btn-primary" disabled={saving} onClick={handleSave}>
                 {saving ? 'Saving...' : (editing ? 'Save Changes' : 'Add Product')}
               </button>

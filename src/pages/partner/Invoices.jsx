@@ -53,7 +53,8 @@ const GST_RATE = 0.18;
 export default function Invoices() {
   const { user } = useAuth();
   // Shipments can exist on active OR completed orders — fetch both buckets.
-  const { orders, loading } = useOrders({ includeStatuses: ['active', 'completed'] });
+  // limit: null so invoices for orders older than the newest 100 don't vanish.
+  const { orders, loading } = useOrders({ includeStatuses: ['active', 'completed'], limit: null });
   const [shipmentsByOrder, setShipmentsByOrder] = useState({});
   const [shipmentsLoading, setShipmentsLoading] = useState(true);
   const [productsById, setProductsById]   = useState({});
@@ -268,9 +269,12 @@ function OrderShipmentsList({ order, shipments, productsById = {}, onBack, onPic
           }, 0);
           const shippingOnThis = isFirst ? (Number(order.shipping_cost) || 0) : 0;
           const cableOnThis = isFirst ? orderCableTotal : 0;
-          const taxable = subtotal + shippingOnThis + cableOnThis;
-          const tax     = taxable * GST_RATE;
-          const total   = taxable + tax;
+          // IGST base excludes shipping — must match computeOrderTotal()
+          // (createOrder), or the invoice total can never reconcile with
+          // the stored order.total_amount the partner is billed against.
+          const taxable = subtotal + cableOnThis;
+          const tax     = Math.round(taxable * GST_RATE * 100) / 100;
+          const total   = taxable + shippingOnThis + tax;
 
           return (
             <div key={s.id} className="card" style={{padding:'1.25rem 1.5rem'}}>
@@ -362,7 +366,10 @@ function InvoiceDetail({
   const lineRows = (shipment.items || []).map(si => {
     const oi      = itemById[si.order_item_id];
     const product = resolveProduct(oi);
-    const price   = Number(oi?.unit_price) || Number(product?.base_price) || 0;
+    // No base_price fallback: unit_price is the price at PO time (incl.
+    // discount, possibly a legitimate ₹0); falling back to today's
+    // base_price would bill amounts the stored order total never included.
+    const price   = Number(oi?.unit_price) || 0;
     const qty     = Number(si.qty) || 0;
     return { id: si.id, product, price, qty, amount: price * qty };
   });
@@ -371,9 +378,10 @@ function InvoiceDetail({
   const orderCableTotal = (order.items || []).reduce((s, it) => s + (Number(it.cable_charge) || 0), 0);
   const shippingOnThis = isFirstShipment ? (Number(order.shipping_cost) || 0) : 0;
   const cableOnThis    = isFirstShipment ? orderCableTotal : 0;
-  const taxable        = subtotal + shippingOnThis + cableOnThis;
-  const tax            = taxable * GST_RATE;
-  const total          = taxable + tax;
+  // IGST base excludes shipping — mirrors computeOrderTotal()/createOrder.
+  const taxable        = subtotal + cableOnThis;
+  const tax            = Math.round(taxable * GST_RATE * 100) / 100;
+  const total          = taxable + shippingOnThis + tax;
   const invNo          = invoiceNo(order.id, shipmentIndex);
 
   const invoiceRef = useRef(null);

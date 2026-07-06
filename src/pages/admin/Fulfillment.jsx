@@ -1,5 +1,5 @@
 // Admin — Fulfillment: manage active orders, update status, fill in per-unit details
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { usePartners } from '../../lib/partners';
 import {
   useOrders, updateFulfillment, orderRef,
@@ -50,7 +50,10 @@ export default function Fulfillment() {
   // stay hidden so the employee only sees ones ready to ship.
   const { user } = useAuth();
   const { orders: allOrders, loading, reload } = useOrders({ includeStatuses: ['active', 'completed'] });
-  const team = resolveOpsTeam(user);
+  // team is only meaningful for employees. Admins must resolve to null —
+  // resolveOpsTeam() defaults everyone to 'operations', which locked admins
+  // into the ops production view and made the Shipments panel unreachable.
+  const team = user?.role === 'employee' ? resolveOpsTeam(user) : null;
   const [selected, setSelected] = useState(null);
   const [form, setForm] = useState({});
   const [filter, setFilter] = useState('all');
@@ -163,7 +166,14 @@ export default function Fulfillment() {
           (sum, si) => sum + (Number(si.qty) || 0),
           0,
         );
-        qtyMap[s.order_id] = (qtyMap[s.order_id] || 0) + sumForShipment;
+        // A parcel only counts as "shipped" once it has actually gone out —
+        // AWB entered (handed to courier) or already delivered. Plan parcels
+        // (created to request docs, no AWB yet) must not inflate the shipped
+        // count, matching the DB rollup rule.
+        const hasShipped = Boolean(s.tracking_number || s.delivered_date);
+        if (hasShipped) {
+          qtyMap[s.order_id] = (qtyMap[s.order_id] || 0) + sumForShipment;
+        }
         if (s.delivered_date) {
           deliveredMap[s.order_id] = (deliveredMap[s.order_id] || 0) + sumForShipment;
         }
@@ -194,9 +204,10 @@ export default function Fulfillment() {
           if (team === 'operations') {
             return deriveOpsOrderStatus(unitStatusByOrder[o.id]) === filter;
           }
-          // Map legacy 'calibration' to 'in_process' so historical rows still
-          // surface under the In Process tab.
-          const ff = o.fulfillment_status === 'calibration' ? 'in_process' : o.fulfillment_status;
+          // Map BOTH legacy values to 'in_process' so historical rows still
+          // surface under the In Process tab (badge already maps both).
+          const ff = (o.fulfillment_status === 'calibration' || o.fulfillment_status === 'ready_to_ship')
+            ? 'in_process' : o.fulfillment_status;
           return ff === filter;
         });
     const term = search.trim().toLowerCase();
@@ -206,6 +217,9 @@ export default function Fulfillment() {
       const hay = [
         orderRef(o), shortId(o.id), o.id, o.partner_po_number, o.tracking_number, o.delivery_method,
         partner?.name, partner?.company_name,
+        // Every parcel's AWB + courier — the Tracking column shows all of
+        // them, so search must match older parcels, not just the latest.
+        ...(trackingByOrder[o.id] || []).flatMap(t => [t.tracking_number, t.courier]),
       ].filter(Boolean).join(' ').toLowerCase();
       return hay.includes(term);
     });
@@ -247,7 +261,19 @@ export default function Fulfillment() {
     return map;
   };
 
+  // Tracks which order's fetch is allowed to populate the form. Guards
+  // against a slow fetch for order A landing after the user already opened
+  // order B (or closed the modal) — without it the modal can show and SAVE
+  // the wrong order's fulfillment status.
+  const openReqRef = useRef(null);
+
+  const closeModal = () => {
+    openReqRef.current = null;
+    setSelected(null);
+  };
+
   const openOrder = async (order) => {
+    openReqRef.current = order.id;
     setSelected(order);
     // Ops lands on Units (their workspace); Dispatch lands on Shipments.
     setModalTab(team === 'operations' ? 'units' : 'tracking');
@@ -258,6 +284,7 @@ export default function Fulfillment() {
     // doesn't render empty fields over already-entered data.
     const itemIds = (order.items || []).map(i => i.id);
     const existing = await loadUnitDetailsForItems(itemIds);
+    if (openReqRef.current !== order.id) return; // stale fetch — newer order opened or modal closed
     setForm({
       fulfillment_status: order.fulfillment_status,
       delivery_method:    order.delivery_method || '',
@@ -266,6 +293,30 @@ export default function Fulfillment() {
       items:              order.items || [],
       units:              buildUnitMap(order.items, existing),
     });
+  };
+
+  // Full refresh of the OPEN order (items + unit rows) plus the list.
+  // Shared by the Shipments panel and the Units tab: shipment actions fire
+  // DB triggers that flip unit production_status (create → dispatched,
+  // delete → un-dispatched), so refreshing only the list would leave
+  // form.units stale and let dispatch act on units that already shipped.
+  const refreshOpenOrder = async () => {
+    if (!selected) return;
+    const reqId = selected.id;
+    const { data: items } = await supabase
+      .from('bridgethings_order_items')
+      .select('*, product:bridgethings_products(id, name, internal_name, base_price, image_url, features)')
+      .eq('order_id', reqId);
+    const itemIds = (items || []).map(i => i.id);
+    const existing = await loadUnitDetailsForItems(itemIds);
+    if (openReqRef.current === reqId) {
+      setForm(prev => ({
+        ...prev,
+        items: items || prev.items,
+        units: buildUnitMap(items || prev.items, existing),
+      }));
+    }
+    await reload(); // keep the orders list in sync
   };
 
   const updateUnitField = (itemId, unitIndex, field, value) => {
@@ -322,7 +373,7 @@ export default function Fulfillment() {
 
       await reload();
       addToast(`Order ${orderRef(selected)} updated successfully`, 'success');
-      setSelected(null);
+      closeModal();
     } catch (err) {
       console.error('[Fulfillment] save failed:', err);
       addToast(err.message || 'Failed to update order', 'error');
@@ -348,7 +399,8 @@ export default function Fulfillment() {
           const matches = (o) => {
             if (s === 'all') return true;
             if (team === 'operations') return deriveOpsOrderStatus(unitStatusByOrder[o.id]) === s;
-            const ff = o.fulfillment_status === 'calibration' ? 'in_process' : o.fulfillment_status;
+            const ff = (o.fulfillment_status === 'calibration' || o.fulfillment_status === 'ready_to_ship')
+              ? 'in_process' : o.fulfillment_status;
             return ff === s;
           };
           const count = orders.filter(matches).length;
@@ -550,7 +602,7 @@ export default function Fulfillment() {
 
       {/* Update Modal */}
       {selected && (
-        <div className="modal-overlay" onClick={() => setSelected(null)}>
+        <div className="modal-overlay" onClick={closeModal}>
           <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h3>
@@ -558,7 +610,7 @@ export default function Fulfillment() {
                   ? `View Order: ${orderRef(selected)}`
                   : `Update Order: ${orderRef(selected)}`}
               </h3>
-              <button className="modal-close" onClick={() => setSelected(null)}>✕</button>
+              <button className="modal-close" onClick={closeModal}>✕</button>
             </div>
             <div className="modal-body">
               {/* Tabs: shipments (parcels) — Dispatch only — vs unit
@@ -566,7 +618,8 @@ export default function Fulfillment() {
                   gets a sibling "Sent to Dispatch" tab so units already
                   handed off don't clutter the working list. */}
               <div className="tabs" style={{marginBottom:'1.25rem'}}>
-                {team === 'dispatch' && (
+                {/* Shipments: dispatch AND admin (team=null). Ops never ships. */}
+                {team !== 'operations' && (
                   <button
                     type="button"
                     className={`tab${modalTab === 'tracking' ? ' active' : ''}`}
@@ -601,7 +654,7 @@ export default function Fulfillment() {
                 })()}
               </div>
 
-              {team === 'dispatch' && modalTab === 'tracking' && (
+              {team !== 'operations' && modalTab === 'tracking' && (
                 // Each shipment carries its own state (courier, AWB,
                 // shipped/delivered dates, In transit/Delivered badge).
                 // The DB trigger rolls all shipments up to the order's
@@ -627,7 +680,7 @@ export default function Fulfillment() {
                         }
                         return map;
                       })()}
-                      onChanged={reload}
+                      onChanged={refreshOpenOrder}
                     />
                   </>
               )}
@@ -639,30 +692,12 @@ export default function Fulfillment() {
                   items={form.items || []}
                   units={form.units || {}}
                   onUpdateUnit={updateUnitField}
-                  onChanged={async () => {
-                    // Refetch this order's items + units so the per-unit
-                    // production_status updates land in form.units. Using
-                    // direct queries avoids the stale-`selected` ref bug
-                    // that previously caused the dropdown to revert.
-                    if (!selected) return;
-                    const { data: items } = await supabase
-                      .from('bridgethings_order_items')
-                      .select('*, product:bridgethings_products(id, name, internal_name, base_price, image_url, features)')
-                      .eq('order_id', selected.id);
-                    const itemIds = (items || []).map(i => i.id);
-                    const existing = await loadUnitDetailsForItems(itemIds);
-                    setForm(prev => ({
-                      ...prev,
-                      items: items || prev.items,
-                      units: buildUnitMap(items || prev.items, existing),
-                    }));
-                    await reload(); // keep the orders list in sync
-                  }}
+                  onChanged={refreshOpenOrder}
                 />
               )}
             </div>
             <div className="modal-footer">
-              <button className="btn btn-secondary" disabled={saving} onClick={() => setSelected(null)}>Cancel</button>
+              <button className="btn btn-secondary" disabled={saving} onClick={closeModal}>Cancel</button>
               <button className="btn btn-primary" disabled={saving} onClick={handleSave}>
                 {saving ? 'Saving...' : 'Save Updates'}
               </button>
@@ -693,11 +728,14 @@ function UnitsTab({ team, items, units, onUpdateUnit, onChanged, view = 'active'
   //   dispatch        — only units waiting on dispatch (ready_to_dispatch)
   //   ops active      — everything still in ops's hands (hide ready/dispatched)
   //   ops sent        — only units already handed off (ready_to_dispatch + dispatched)
+  //   admin (null)    — full oversight: every unit, whatever its state
   const filterFn = team === 'dispatch'
     ? (u) => u.production_status === 'ready_to_dispatch'
     : isOpsSent
       ? (u) => u.production_status === 'ready_to_dispatch' || u.production_status === 'dispatched'
-      : (u) => u.production_status !== 'ready_to_dispatch' && u.production_status !== 'dispatched';
+      : team === 'operations'
+        ? (u) => u.production_status !== 'ready_to_dispatch' && u.production_status !== 'dispatched'
+        : () => true;
 
   const filteredUnits = Object.fromEntries(
     Object.entries(units || {}).map(([itemId, arr]) => [itemId, (arr || []).filter(filterFn)]),

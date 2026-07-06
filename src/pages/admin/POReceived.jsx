@@ -33,8 +33,12 @@ const STATUS_BADGE = {
 };
 
 export default function POReceived() {
+  // limit: null — this is the ONLY admin UI listing pending POs; the default
+  // 100-row cap (shared across all four statuses) would silently evict an
+  // old PO stuck in negotiation once newer orders pile up.
   const { orders, loading, reload } = useOrders({
     includeStatuses: ['pending_approval', 'active', 'completed', 'rejected'],
+    limit: null,
   });
   const { getPartner } = usePartners();
 

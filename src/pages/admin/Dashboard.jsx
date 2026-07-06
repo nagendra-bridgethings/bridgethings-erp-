@@ -31,7 +31,11 @@ export default function AdminDashboard() {
   const team = user?.role === 'employee' ? resolveOpsTeam(user) : null;
 
   const { partners, getPartner, loading: partnersLoading } = usePartners();
-  const { orders, loading: ordersLoading, reload: reloadOrders } = useOrders({ limit: 50 });
+  // limit: null — the stat cards, Revenue Received, and the Production
+  // Approvals queue are aggregates over ALL orders; a capped window silently
+  // drops older orders (e.g. an old order paid partially today would vanish
+  // from the approvals queue forever). Display tables slice client-side.
+  const { orders, loading: ordersLoading, reload: reloadOrders } = useOrders({ limit: null });
   const [productCount, setProductCount] = useState(0);
   const [productsLoading, setProductsLoading] = useState(true);
   // Per-order unit-status counts. Used to filter the Active/Completed

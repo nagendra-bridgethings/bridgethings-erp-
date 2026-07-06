@@ -55,6 +55,8 @@ const ORDER_SELECT = `
  *   partnerId: filter to a specific partner (rarely needed since RLS handles partners)
  *   limit: max rows to return (default 100). Dashboards typically need only the
  *     most recent — pulling the entire orders table on every render gets slow.
+ *     Pass limit: null for NO client cap — required wherever the result feeds
+ *     aggregates (revenue totals, queue tabs) that must never silently truncate.
  *   All filters optional. With no filters and admin role, returns every order.
  */
 export function useOrders({ status, includeStatuses, partnerId, limit = 100 } = {}) {
@@ -68,8 +70,8 @@ export function useOrders({ status, includeStatuses, partnerId, limit = 100 } = 
     let query = supabase
       .from('bridgethings_orders')
       .select(ORDER_SELECT)
-      .order('created_at', { ascending: false })
-      .limit(limit);
+      .order('created_at', { ascending: false });
+    if (limit != null) query = query.limit(limit);
 
     if (status)            query = query.eq('status', status);
     if (includeStatuses)   query = query.in('status', includeStatuses);
@@ -157,8 +159,17 @@ export async function createOrder({
 
   if (itemsErr) {
     // Best-effort rollback: delete the order row we just created so we don't
-    // leave an order without its items.
-    await supabase.from('bridgethings_orders').delete().eq('id', order.id);
+    // leave an order without its items. .select() so an RLS-blocked delete
+    // (0 rows, no error) is at least visible in the console instead of
+    // silently leaving an empty order in the admin queue.
+    const { data: deleted, error: delErr } = await supabase
+      .from('bridgethings_orders')
+      .delete()
+      .eq('id', order.id)
+      .select('id');
+    if (delErr || !deleted?.length) {
+      console.error('[orders] rollback failed — orphaned order', order.id, delErr || '(0 rows deleted)');
+    }
     throw itemsErr;
   }
 
@@ -192,7 +203,10 @@ export async function confirmOrder(orderId, employeeNotes) {
     ? current.proposed_delivery_date
     : current.requested_delivery_date;
 
-  const { error: orderErr } = await supabase
+  // Guard on the still-pending status so a stale modal (order already
+  // accepted/rejected elsewhere) can't overwrite the newer state. A 0-row
+  // update returns success with empty data, so we must check the count.
+  const { data: updated, error: orderErr } = await supabase
     .from('bridgethings_orders')
     .update({
       status:                  'active',
@@ -200,8 +214,11 @@ export async function confirmOrder(orderId, employeeNotes) {
       committed_delivery_date: committed || null,
       updated_at:              new Date().toISOString(),
     })
-    .eq('id', orderId);
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .select('id');
   if (orderErr) throw orderErr;
+  if (!updated?.length) throw new Error('This PO is no longer pending (it may already be approved or rejected). Please refresh.');
 
   // Notify the partner their PO is confirmed (with the committed date).
   const party = await loadOrderParty(orderId);
@@ -264,7 +281,7 @@ export async function acceptDeliveryCounter(orderId) {
     .single();
   if (readErr) throw readErr;
 
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('bridgethings_orders')
     .update({
       status:                      'active',
@@ -272,8 +289,11 @@ export async function acceptDeliveryCounter(orderId) {
       committed_delivery_date:     current.proposed_delivery_date || null,
       updated_at:                  new Date().toISOString(),
     })
-    .eq('id', orderId);
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .select('id');
   if (error) throw error;
+  if (!updated?.length) throw new Error('This order is no longer awaiting your response. Please refresh.');
 
   // Notify admins the partner accepted — the order is now active.
   const party = await loadOrderParty(orderId);
@@ -289,15 +309,18 @@ export async function acceptDeliveryCounter(orderId) {
  */
 export async function declineDeliveryCounter(orderId) {
   if (!orderId) throw new Error('orderId is required');
-  const { error } = await supabase
+  const { data: updated, error } = await supabase
     .from('bridgethings_orders')
     .update({
       status:         'rejected',
       employee_notes: 'Partner declined the counter-proposed delivery date.',
       updated_at:     new Date().toISOString(),
     })
-    .eq('id', orderId);
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .select('id');
   if (error) throw error;
+  if (!updated?.length) throw new Error('This order is no longer awaiting your response. Please refresh.');
 
   // Notify admins the partner declined — the order was rejected.
   const party = await loadOrderParty(orderId);
@@ -313,15 +336,21 @@ export async function declineDeliveryCounter(orderId) {
  *   can see the rejection history. Optional notes are stored in employee_notes.
  */
 export async function rejectOrder(orderId, notes) {
-  const { error } = await supabase
+  // Same stale-snapshot guard as confirmOrder: never reject an order that
+  // already left pending (e.g. the partner accepted a counter-date and the
+  // admin's list is stale — rejecting would kill an active, possibly paid order).
+  const { data: updated, error } = await supabase
     .from('bridgethings_orders')
     .update({
       status:         'rejected',
       employee_notes: notes?.trim() || null,
       updated_at:     new Date().toISOString(),
     })
-    .eq('id', orderId);
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .select('id');
   if (error) throw error;
+  if (!updated?.length) throw new Error('This PO is no longer pending (it may already be approved or rejected). Please refresh.');
 
   // Notify the partner their PO was rejected (with the reason, if given).
   const party = await loadOrderParty(orderId);

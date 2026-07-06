@@ -67,9 +67,22 @@ export function daysRemaining(sub) {
 
 // Pick the most-recent (latest end_date) sub for a unit. There can be many
 // rows over time (yearly renewals); the latest one is what the UI cares about.
+// Cancelled rows only represent the unit when NOTHING else exists — a
+// cancelled renewal must not mask a still-valid active subscription
+// underneath it (cancelled rows "stay in history but stop counting").
 export function latestSubFor(subs) {
   if (!subs?.length) return null;
-  return [...subs].sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''))[0];
+  const live = subs.filter(s => s.status !== 'cancelled');
+  const pool = live.length ? live : subs;
+  return [...pool].sort((a, b) => (b.end_date || '').localeCompare(a.end_date || ''))[0];
+}
+
+// The sub that represents the unit's PAID coverage right now — ignores
+// pending requests (whose placeholder end_date always sorts newest) and
+// cancelled rows. Use for credential access + expiry displays so a renewal
+// request doesn't hide coverage the partner already paid for.
+export function coverageSubFor(subs) {
+  return latestSubFor((subs || []).filter(s => s.status === 'active'));
 }
 
 // Hook: load every subscription visible to the current user (RLS handles the
@@ -137,7 +150,12 @@ export async function createSubscription({
 
 // Admin can cancel a subscription (mistake, refund, etc.). The row stays
 // for the audit trail; UI just stops counting it.
-export async function cancelSubscription(id) {
+//
+// notifyPartner=false is passed when this is used to REJECT a partner's
+// still-pending request (not an active subscription): the partner never
+// had coverage, so the "your subscription was cancelled" mail would be
+// misleading. The decline is surfaced in-app instead.
+export async function cancelSubscription(id, { notifyPartner = true } = {}) {
   const { data, error } = await supabase
     .from(TABLE)
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
@@ -147,7 +165,7 @@ export async function cancelSubscription(id) {
   if (error) throw error;
 
   // Let the partner know a subscription was cancelled.
-  if (data?.unit_id) {
+  if (notifyPartner && data?.unit_id) {
     const ctx = await unitContext(data.unit_id);
     if (ctx.party?.partner?.email) {
       notify('sub_cancelled',

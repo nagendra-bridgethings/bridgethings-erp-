@@ -75,6 +75,21 @@ const readPersistedSupabaseUser = () => {
   } catch { return null; }
 };
 
+// Remove Supabase's persisted session from localStorage. Used when a
+// server-side signOut fails or times out: supabase-js does NOT clear the
+// stored session on network failure, so without this a "signed out" user
+// is silently signed back in on the next page load — a real exposure on
+// shared machines.
+const removePersistedSupabaseSession = () => {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('sb-') && (k.endsWith('-auth-token') || k.endsWith('-auth-token-code-verifier'))) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch { /* ignore */ }
+};
+
 const withTimeout = (promise, ms, label = 'request') =>
   Promise.race([
     promise,
@@ -194,6 +209,10 @@ export function AuthProvider({ children }) {
   // would race login() and (if the same email exists in multiple role
   // tables) briefly show the wrong dashboard before login() corrects it.
   const loginInFlightRef = useRef(false);
+  // Handle of the delayed release below — cleared at the start of the next
+  // login() so a leftover timer from a failed attempt can't drop the flag
+  // in the middle of a fresh attempt.
+  const loginReleaseTimerRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -286,7 +305,10 @@ export function AuthProvider({ children }) {
     }
 
     // Suppress the auth-state listener for the entire login flow so it
-    // can't race us and briefly set the wrong role.
+    // can't race us and briefly set the wrong role. Clear any pending
+    // release timer from a previous attempt first — it would otherwise
+    // fire mid-flow and un-suppress the listener too early.
+    if (loginReleaseTimerRef.current) clearTimeout(loginReleaseTimerRef.current);
     loginInFlightRef.current = true;
 
     try {
@@ -308,12 +330,27 @@ export function AuthProvider({ children }) {
       // we release the flag still hits the fast path.
       loadedUserIdRef.current = data.user.id;
 
-      const profileData = await fetchProfileFromTable(data.user.id, selectedRole);
+      // One retry before concluding role mismatch: fetchProfileFromTable
+      // returns null for BOTH "no row" and "query error/timeout", and a
+      // single transient failure here would sign a valid user out with a
+      // misleading "wrong role" message.
+      let profileData = await fetchProfileFromTable(data.user.id, selectedRole);
+      if (!profileData) {
+        await new Promise(r => setTimeout(r, 500));
+        profileData = await fetchProfileFromTable(data.user.id, selectedRole);
+      }
 
       if (!profileData) {
         clearCachedRole(data.user.id);
         loadedUserIdRef.current = null;
-        await withTimeout(supabase.auth.signOut(), 5000, 'signOut').catch(() => {});
+        let signOutFailed;
+        try {
+          const { error: soErr } = await withTimeout(supabase.auth.signOut(), 5000, 'signOut');
+          signOutFailed = !!soErr;
+        } catch { signOutFailed = true; }
+        // A failed server signOut leaves the session in localStorage — the
+        // "wrong role" rejection would silently log them back in on reload.
+        if (signOutFailed) removePersistedSupabaseSession();
         setUser(null);
         setProfile(null);
         throw new Error(
@@ -329,14 +366,22 @@ export function AuthProvider({ children }) {
     } finally {
       // Keep the flag set for a tick so any queued SIGNED_IN event from the
       // signInWithPassword call still sees it set and skips its own fetch.
-      setTimeout(() => { loginInFlightRef.current = false; }, 300);
+      loginReleaseTimerRef.current = setTimeout(() => { loginInFlightRef.current = false; }, 300);
     }
   };
 
   const logout = async () => {
     if (user?.id) clearCachedRole(user.id);
     loadedUserIdRef.current = null;
-    await withTimeout(supabase.auth.signOut(), 5000, 'signOut').catch(() => {});
+    // supabase-js resolves with { error } (does NOT throw) on network
+    // failure AND skips removing the stored session — so an unchecked
+    // signOut can leave the user auto-logged-in on the next reload.
+    let failed;
+    try {
+      const { error } = await withTimeout(supabase.auth.signOut(), 5000, 'signOut');
+      failed = !!error;
+    } catch { failed = true; }
+    if (failed) removePersistedSupabaseSession();
     setUser(null);
     setProfile(null);
   };

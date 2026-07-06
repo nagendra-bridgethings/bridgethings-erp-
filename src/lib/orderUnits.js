@@ -88,6 +88,9 @@ export async function setUnitsProductionStatus(unitIds, status) {
 export async function sendUnitsBackToOps(unitIds, note) {
   if (!unitIds?.length) throw new Error('Pick at least one unit');
   if (!note?.trim())    throw new Error('Please add a note for the operations team');
+  // .neq guard: a stale client (unit list loaded before a parcel was
+  // created) must never flip an already-shipped unit back to ops — the
+  // shipment row would still exist and every rollup would disagree.
   const { error } = await supabase
     .from(TABLE)
     .update({
@@ -95,7 +98,8 @@ export async function sendUnitsBackToOps(unitIds, note) {
       dispatch_review_note: note.trim(),
       updated_at:           new Date().toISOString(),
     })
-    .in('id', unitIds);
+    .in('id', unitIds)
+    .neq('production_status', 'dispatched');
   if (error) throw error;
 
   // Dispatch bounced units back — notify operations with the reason.

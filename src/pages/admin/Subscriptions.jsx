@@ -120,8 +120,11 @@ export default function Subscriptions() {
   const pendingAmount  = rows
     .filter(r => r.status === 'pending')
     .reduce((s, r) => s + (Number(r.latest?.amount_due) || 0), 0);
+  // Filter on the DERIVED status: the DB never flips status on expiry, so
+  // raw status==='active' would count expired rows and every historical
+  // renewal forever — contradicting the adjacent Active Subscriptions card.
   const activeRevenue  = subs
-    .filter(s => s.status === 'active')
+    .filter(s => ['active', 'expiring_soon'].includes(effectiveStatus(s)))
     .reduce((s, x) => s + (Number(x.amount_paid) || 0), 0);
   const expiringSoon   = rows.filter(r => r.status === 'expiring_soon').length;
   const loading        = subsLoading || unitsLoading;
@@ -252,6 +255,10 @@ export default function Subscriptions() {
           }}
           onCancelled={async () => {
             await reloadSubs();
+            // Close like onSaved does: the open modal holds a pre-cancel
+            // snapshot (stale badge + live Cancel button), so leaving it
+            // open invites a duplicate cancel + duplicate partner email.
+            setOpenUnit(null);
             addToast('Subscription cancelled', 'info');
           }}
         />
@@ -336,7 +343,9 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
     if (!window.confirm('Reject this subscription request? The partner will need to submit a new request.')) return;
     setSaving(true);
     try {
-      await cancelSubscription(latest.id);
+      // Declining a pending REQUEST — suppress the "subscription cancelled"
+      // mail (the partner never had active coverage; that wording misleads).
+      await cancelSubscription(latest.id, { notifyPartner: false });
       await onSaved('Request rejected');
     } catch (err) {
       console.error('[subscriptions] reject failed:', err);

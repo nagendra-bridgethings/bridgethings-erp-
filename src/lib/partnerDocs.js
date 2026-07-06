@@ -183,33 +183,27 @@ export async function uploadShipmentDoc({
     .single();
   if (error) throw error;
 
-  // If all requested docs for this shipment are now uploaded, mark
-  // partner_docs_status='submitted' so dispatch's banner goes green
-  // and any downstream gate unlocks.
+  // If all requested docs for this shipment are now uploaded, flip
+  // partner_docs_status='submitted' via the SECURITY DEFINER RPC. A direct
+  // UPDATE on bridgethings_shipments is RLS-blocked for partners (staff-only
+  // write policy) and silently matches 0 rows — the status would stay
+  // 'requested' forever while the "ready to ship" email fired anyway. The
+  // RPC verifies ownership + completeness server-side and returns whether
+  // the status actually transitioned; only then do we notify dispatch.
   if (shipment) {
-    const required = requiredDocsForShipment(shipment);
-    if (required.length) {
-      const { data: existing } = await supabase
-        .from(TABLE)
-        .select('doc_type')
-        .eq('shipment_id', shipmentId);
-      const have = new Set((existing || []).map(r => r.doc_type));
-      const allDone = required.every(t => have.has(t));
-      if (allDone) {
-        try {
-          await supabase
-            .from('bridgethings_shipments')
-            .update({ partner_docs_status: 'submitted' })
-            .eq('id', shipmentId);
-          // All requested docs are in — tell dispatch the parcel can ship.
-          const party = await loadOrderParty(orderId);
-          notify('docs_submitted', { group: 'dispatch' },
-            { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'A partner' },
-            { relatedOrderId: orderId, relatedShipmentId: shipmentId });
-        } catch (e) {
-          console.error('[partnerDocs] mark shipment submitted failed:', e);
-        }
+    try {
+      const { data: flipped, error: rpcErr } = await supabase
+        .rpc('bridgethings_mark_shipment_docs_submitted', { p_shipment_id: shipmentId });
+      if (rpcErr) throw rpcErr;
+      if (flipped === true) {
+        // All requested docs are in — tell dispatch the parcel can ship.
+        const party = await loadOrderParty(orderId);
+        notify('docs_submitted', { group: 'dispatch' },
+          { orderShortId: orderShortId(orderId), partnerName: party?.partner?.name || 'A partner' },
+          { relatedOrderId: orderId, relatedShipmentId: shipmentId });
       }
+    } catch (e) {
+      console.error('[partnerDocs] mark shipment submitted failed:', e);
     }
   }
 

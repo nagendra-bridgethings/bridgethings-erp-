@@ -40,10 +40,14 @@ export function usePartners() {
 // the UI never sends an obviously bad value.
 export async function updatePartnerDiscount(partnerId, percent) {
   const pct = Math.max(0, Math.min(100, Number(percent) || 0));
-  const { error } = await supabase
+  // .select() so an RLS-filtered update (0 rows touched, no error) is
+  // detectable — without it the UI toasts success while nothing changed.
+  const { data, error } = await supabase
     .from('bridgethings_channelpartners')
     .update({ discount_percent: pct })
-    .eq('id', partnerId);
+    .eq('id', partnerId)
+    .select('discount_percent');
   if (error) throw error;
+  if (!data?.length) throw new Error('Discount update was blocked — no row was changed.');
   return pct;
 }

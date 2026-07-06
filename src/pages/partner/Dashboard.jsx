@@ -9,9 +9,12 @@ export default function PartnerDashboard() {
   const { user } = useAuth();
   // RLS scopes to the partner's own orders. Accepted orders (active /
   // completed) drive the at-a-glance stats.
+  // limit: null — these cards are whole-history aggregates; a 50-row cap
+  // would silently drop older orders (and hide old unpaid balances) once a
+  // partner passes 50 orders.
   const { orders: myOrders } = useOrders({
     includeStatuses: ['active', 'completed'],
-    limit: 50,
+    limit: null,
   });
   const pendingPayment = myOrders.filter(o => o.payment_status !== 'completed');
   const totalOrdered = myOrders.reduce((s, o) => s + (Number(o.total_amount) || 0), 0);

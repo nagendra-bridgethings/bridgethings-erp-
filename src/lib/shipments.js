@@ -65,18 +65,31 @@ export function useShipmentsForOrder(orderId) {
 }
 
 // Given an order's items (with `qty`) and the list of shipments already
-// recorded, compute how many of each item is still pending shipment.
-// Returns a map keyed by order_item_id → { ordered, shipped, remaining }.
+// recorded, compute per order_item_id:
+//   ordered    — qty on the order line
+//   shipped    — qty ALLOCATED to any parcel (plan or dispatched). Drives
+//                "remaining to parcel" so the same unit can't be put in two
+//                parcels.
+//   dispatched — qty in parcels that have ACTUALLY gone out (AWB entered or
+//                delivered). This is "really shipped" — a plan parcel awaiting
+//                docs/AWB does NOT count here.
+//   remaining  — qty not yet in any parcel (ordered − shipped).
+// Callers use `shipped`/`remaining` for the add-shipment form and
+// `dispatched` for shipped-progress display, so a packed-but-not-yet-shipped
+// parcel never reads as "shipped".
 export function computeRemainingByItem(items = [], shipments = []) {
   const map = {};
   for (const it of items) {
-    map[it.id] = { ordered: Number(it.qty) || 0, shipped: 0, remaining: Number(it.qty) || 0 };
+    map[it.id] = { ordered: Number(it.qty) || 0, shipped: 0, dispatched: 0, remaining: Number(it.qty) || 0 };
   }
   for (const s of shipments) {
+    const isDispatched = Boolean(s.tracking_number || s.delivered_date);
     for (const si of (s.items || [])) {
       const slot = map[si.order_item_id];
       if (!slot) continue;
-      slot.shipped   += Number(si.qty) || 0;
+      const q = Number(si.qty) || 0;
+      slot.shipped   += q;
+      if (isDispatched) slot.dispatched += q;
       slot.remaining = Math.max(0, slot.ordered - slot.shipped);
     }
   }
@@ -102,6 +115,38 @@ export async function createShipment({
     .map(i => ({ orderItemId: i.orderItemId, qty: Math.floor(Number(i.qty) || 0) }))
     .filter(i => i.orderItemId && i.qty > 0);
   if (!cleanItems.length) throw new Error('Add at least one item with a positive quantity');
+
+  // Validate against the CURRENT remaining qty in the DB, not the caller's
+  // possibly-stale snapshot (another session/tab may have shipped since the
+  // form opened). A failed read throws — never treat it as "0 shipped".
+  const { data: orderItems, error: oiErr } = await supabase
+    .from('bridgethings_order_items')
+    .select('id, qty')
+    .eq('order_id', orderId);
+  if (oiErr) throw oiErr;
+  const orderedById = Object.fromEntries((orderItems || []).map(i => [i.id, Number(i.qty) || 0]));
+
+  const { data: priorShipments, error: psErr } = await supabase
+    .from(SHIPMENTS_TABLE)
+    .select('id, items:bridgethings_shipment_items(order_item_id, qty)')
+    .eq('order_id', orderId);
+  if (psErr) throw psErr;
+  const shippedById = {};
+  for (const s of priorShipments || []) {
+    for (const si of (s.items || [])) {
+      shippedById[si.order_item_id] = (shippedById[si.order_item_id] || 0) + (Number(si.qty) || 0);
+    }
+  }
+
+  for (const i of cleanItems) {
+    if (!(i.orderItemId in orderedById)) {
+      throw new Error('Shipment contains an item that does not belong to this order');
+    }
+    const remaining = orderedById[i.orderItemId] - (shippedById[i.orderItemId] || 0);
+    if (i.qty > remaining) {
+      throw new Error(`Cannot ship ${i.qty} units — only ${Math.max(0, remaining)} remain unshipped for this item. Refresh and try again.`);
+    }
+  }
 
   const { data: shipment, error: shipErr } = await supabase
     .from(SHIPMENTS_TABLE)
@@ -129,10 +174,21 @@ export async function createShipment({
     throw itemsErr;
   }
 
-  // If this shipment was created WITH a tracking number it's a real
-  // dispatch (not a plan) — tell the partner now. Plan-first parcels
-  // notify later from updateShipment when the AWB is added.
-  if ((trackingNumber || '').trim()) {
+  // Send the right partner mail for the state this parcel was created in.
+  // Mutually exclusive so a create-with-both never double-sends:
+  //   • already delivered (hand-delivery / completed) → delivery confirmation
+  //   • has a tracking number (real dispatch)         → "shipped" mail
+  //   • neither (a plan awaiting docs/AWB)            → no mail yet; it fires
+  //     later from updateShipment/markShipmentDelivered.
+  if ((deliveredDate || '').trim()) {
+    const party = await loadOrderParty(orderId);
+    if (party?.partner?.email) {
+      notify('shipment_delivered',
+        { email: party.partner.email, role: 'partner', userId: party.partner.id },
+        { orderShortId: orderShortId(orderId), partnerName: party.partner.name },
+        { relatedOrderId: orderId, relatedShipmentId: shipment.id });
+    }
+  } else if ((trackingNumber || '').trim()) {
     await notifyShipmentShipped(orderId, courier, trackingNumber, shipment.id);
   }
   return shipment;

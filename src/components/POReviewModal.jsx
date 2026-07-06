@@ -12,6 +12,9 @@ import { useToast } from '../lib/toast';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', { day:'2-digit', month:'short', year:'numeric' }) : '—';
+// Local-time YYYY-MM-DD — toISOString() gives the UTC day, which lets IST
+// users pick "yesterday" between 00:00 and 05:30.
+const todayLocal = () => new Date().toLocaleDateString('en-CA');
 
 const STATUS_BADGE = {
   pending_approval: { className: 'badge-warning', label: 'Pending Review' },
@@ -60,6 +63,9 @@ export default function POReviewModal({ order, partner, onClose, onConfirmed, on
 
   const handleProposeCounter = async () => {
     if (!counterDate)        { addToast('Pick a proposed date', 'error'); return; }
+    // The input's `min` doesn't stop typed dates — and an accepted counter
+    // is locked straight into committed_delivery_date with no review.
+    if (counterDate < todayLocal()) { addToast('Proposed date cannot be in the past', 'error'); return; }
     if (!counterNote.trim()) { addToast('Add a note explaining the new date', 'error'); return; }
     setBusy(true);
     try {
@@ -176,7 +182,7 @@ export default function POReviewModal({ order, partner, onClose, onConfirmed, on
                     type="date"
                     className="form-input"
                     value={counterDate}
-                    min={new Date().toISOString().slice(0, 10)}
+                    min={todayLocal()}
                     onChange={e => setCounterDate(e.target.value)}
                   />
                 </div>

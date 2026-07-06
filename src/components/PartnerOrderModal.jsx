@@ -1,8 +1,9 @@
 // Shared partner-facing modal: Details + Tracking for a single order.
 // Used by /partner/orders and /partner (dashboard) so clicking an order ID
 // anywhere gives the partner the same view.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { loadUnitDetailsForItems } from '../lib/orderUnits';
+import { usePartners } from '../lib/partners';
 import { acceptDeliveryCounter, declineDeliveryCounter, saveShipTo, derivePartnerStatusLabel, orderRef } from '../lib/orders';
 import { DOC_LABELS, EWAY_BILL_THRESHOLD, requiredDocsForShipment, useLegacyOrderDocs, useShipmentDocs, uploadShipmentDoc, getPartnerDocUrl } from '../lib/partnerDocs';
 import { usePaymentsForOrder, PAYMENT_METHOD_LABEL, PAYMENT_METHODS, submitPaymentProof, getPaymentSlipUrl } from '../lib/payments';
@@ -17,6 +18,9 @@ const ORDER_STATUS_COLORS = { draft:'badge-gray', pending_approval:'badge-warnin
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
+// Local-time YYYY-MM-DD. toISOString() would give the UTC day — IST users
+// between 00:00 and 05:30 would see yesterday pre-filled as payment date.
+const todayLocal = () => new Date().toLocaleDateString('en-CA');
 
 export default function PartnerOrderModal({ order, onClose, onChanged, detailsOnly = false }) {
   const { addToast } = useToast();
@@ -547,9 +551,14 @@ function PartnerPaymentSection({ order, payments, loading, reload }) {
     .filter(p => p.status === 'verified')
     .reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const outstanding = Math.max(0, (Number(order.total_amount) || 0) - verifiedPaid);
-  // Only let the partner upload while their order is active AND there's
-  // still money to pay. Once fully paid we hide the form entirely.
-  const showUpload = order.status === 'active' && outstanding > 0;
+  // Upload form is PARTNER-only (staff opening this modal from Finance must
+  // never submit under their own uid — the slip would land in the wrong
+  // storage folder and the partner couldn't view it). 'completed' is
+  // included because the shipments trigger completes an order on delivery
+  // even when a balance is still due (partial-payment dispatch).
+  const showUpload = user?.role === 'partner'
+    && (order.status === 'active' || order.status === 'completed')
+    && outstanding > 0;
 
   return (
     <>
@@ -583,12 +592,13 @@ function PartnerPaymentSection({ order, payments, loading, reload }) {
 function PartnerPaymentUpload({ orderId, partnerId, outstanding, onSubmitted }) {
   const { addToast } = useToast();
   const [amount, setAmount]    = useState('');
-  const [date, setDate]        = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate]        = useState(todayLocal());
   const [method, setMethod]    = useState('bank_transfer');
   const [ref, setRef]          = useState('');
   const [notes, setNotes]      = useState('');
   const [file, setFile]        = useState(null);
   const [busy, setBusy]        = useState(false);
+  const fileInputRef           = useRef(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -606,7 +616,11 @@ function PartnerPaymentUpload({ orderId, partnerId, outstanding, onSubmitted }) 
       });
       addToast('Payment proof submitted. Accounts team will verify shortly.', 'success');
       setAmount(''); setRef(''); setNotes(''); setFile(null);
-      setDate(new Date().toISOString().slice(0, 10));
+      // Clear the DOM value too — the uncontrolled file input keeps showing
+      // the old filename and satisfies `required`, so the next submit would
+      // send file=null and error confusingly.
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      setDate(todayLocal());
       if (onSubmitted) await onSubmitted();
     } catch (err) {
       console.error('[payments] submit proof failed:', err);
@@ -661,6 +675,7 @@ function PartnerPaymentUpload({ orderId, partnerId, outstanding, onSubmitted }) 
       <div className="form-group" style={{margin:0}}>
         <label className="form-label">Payment Slip (PDF or image)</label>
         <input
+          ref={fileInputRef}
           type="file"
           accept="application/pdf,image/*"
           onChange={e => setFile(e.target.files?.[0] || null)}
@@ -758,7 +773,10 @@ function PartnerShipmentsList({ order }) {
                 The oldest shipment (indexLabel === 1) also surfaces any
                 legacy order-level docs that the partner uploaded before
                 docs became per-shipment. */}
-            {order?.ship_to_is_different && (
+            {/* Partner-only: staff viewers must not get live file inputs —
+                their upload would land under the WRONG uid folder (storage
+                write succeeds, table insert fails) and orphan the file. */}
+            {order?.ship_to_is_different && user?.role === 'partner' && (
               <ShipmentDocsUploadBlock
                 shipment={s}
                 orderId={order.id}
@@ -975,8 +993,17 @@ function PartnerPaymentHistory({ payments, loading }) {
 function SlipLink({ path }) {
   const handleClick = async (e) => {
     e.preventDefault();
+    // Open synchronously inside the click gesture — a window.open after the
+    // await is silently killed by popup blockers (Safari default settings).
+    const w = window.open('', '_blank');
+    if (w) w.opener = null;
     const url = await getPaymentSlipUrl(path);
-    if (url) window.open(url, '_blank', 'noopener');
+    if (url) {
+      if (w) w.location = url;
+      else window.open(url, '_blank', 'noopener');
+    } else if (w) {
+      w.close();
+    }
   };
   return <a href="#" onClick={handleClick} style={{color:'var(--primary)'}}>View</a>;
 }
@@ -988,12 +1015,17 @@ function SlipLink({ path }) {
 function PartnerShippingSection({ order, onChanged }) {
   const { user } = useAuth();
   const { addToast } = useToast();
+  const { getPartner } = usePartners();
   const total = Number(order.total_amount) || 0;
   const heavyOrder = total >= EWAY_BILL_THRESHOLD;
   // Only the channel partner can edit these fields — they're the source
   // of truth for ship-to / drop-ship docs. Everyone else (admin, ops,
   // dispatch, accountant) sees the same data but read-only.
   const canEdit = user?.role === 'partner';
+  // Bill To is the ORDER's partner. For the partner viewer that's their own
+  // profile (no extra fetch / RLS dependency); staff viewers resolve the
+  // partner row — showing the accountant's own name as "Bill To" is wrong.
+  const billTo = canEdit ? user : (getPartner(order.partner_id) || {});
 
   const [diff, setDiff] = useState(!!order.ship_to_is_different);
   const [form, setForm] = useState({
@@ -1052,11 +1084,11 @@ function PartnerShippingSection({ order, onChanged }) {
         {/* Bill-to summary — read-only, comes from the partner's profile */}
         <div>
           <div className="text-xs text-muted" style={{marginBottom:'0.2rem'}}>Bill To</div>
-          <div className="font-semibold">{user?.name || user?.company_name || '—'}</div>
-          {user?.address && <div className="text-sm" style={{color:'var(--text-muted)'}}>{user.address}</div>}
-          {(user?.city || user?.state || user?.pincode) && (
+          <div className="font-semibold">{billTo?.name || billTo?.company_name || '—'}</div>
+          {billTo?.address && <div className="text-sm" style={{color:'var(--text-muted)'}}>{billTo.address}</div>}
+          {(billTo?.city || billTo?.state || billTo?.pincode) && (
             <div className="text-sm" style={{color:'var(--text-muted)'}}>
-              {[user.city, user.state, user.pincode].filter(Boolean).join(', ')}
+              {[billTo.city, billTo.state, billTo.pincode].filter(Boolean).join(', ')}
             </div>
           )}
         </div>
