@@ -317,7 +317,7 @@ function DetailsTab({ order, itemsSubtotal, cableTotal = 0, shipping, tax, units
                         hold:              { className: 'badge-info',    label: 'In Progress' },
                         production:        { className: 'badge-info',    label: 'In Production' },
                         sent_back:         { className: 'badge-info',    label: 'In Production' },
-                        ready_to_dispatch: { className: 'badge-warning', label: 'Sent for Dispatch' },
+                        ready_to_dispatch: { className: 'badge-warning', label: 'Sent to Dispatch' },
                         dispatched:        { className: 'badge-success', label: 'Dispatched' },
                       }[s] || { className: 'badge-gray', label: s };
                       return <span className={`badge ${fallback.className}`}>{fallback.label}</span>;
@@ -326,7 +326,7 @@ function DetailsTab({ order, itemsSubtotal, cableTotal = 0, shipping, tax, units
                     const LBL = {
                       hold:              'In Progress',
                       production:        'In Production',
-                      ready_to_dispatch: 'Sent for Dispatch',
+                      ready_to_dispatch: 'Sent to Dispatch',
                       shipped:           'Shipped',
                       delivered:         'Delivered',
                     };

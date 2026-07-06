@@ -7,11 +7,12 @@ import { usePartners } from '../../lib/partners';
 import { useToast } from '../../lib/toast';
 import {
   useUnitSubscriptions, createSubscription, approveSubscription, cancelSubscription,
-  setDashboardCredentials,
+  setDashboardCredentials, rejectSubscriptionProof, getSubscriptionSlipUrl,
   effectiveStatus, latestSubFor, addOneYear,
 } from '../../lib/subscriptions';
 import { orderRef } from '../../lib/orders';
 import { staffProductName } from '../../lib/productName';
+import { PAYMENT_METHOD_LABEL } from '../../lib/payments';
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
@@ -19,19 +20,21 @@ const today   = () => new Date().toISOString().slice(0, 10);
 
 const STATUS_LABELS = {
   active:'Active', expiring_soon:'Expiring Soon', expired:'Expired',
-  pending:'Pending Request', cancelled:'Cancelled', none:'No Subscription',
+  pending:'Pending Request', submitted:'Payment Submitted', cancelled:'Cancelled', none:'No Subscription',
 };
 const STATUS_COLORS = {
   active:'badge-success', expiring_soon:'badge-warning', expired:'badge-danger',
-  pending:'badge-info', cancelled:'badge-gray', none:'badge-gray',
+  pending:'badge-info', submitted:'badge-warning', cancelled:'badge-gray', none:'badge-gray',
 };
 
-// 'pending' first so partner requests are the most prominent admin action.
-const TAB_FILTERS = ['all', 'pending', 'none', 'active', 'expiring_soon', 'expired'];
+// 'submitted' (proof in — ready to verify) first, then 'pending' (awaiting the
+// partner's proof), so the actionable requests are the most prominent.
+const TAB_FILTERS = ['all', 'submitted', 'pending', 'none', 'active', 'expiring_soon', 'expired'];
 
 const ROW_ACTION_LABEL = {
-  pending: 'Review',
-  none:    'Activate',
+  submitted: 'Verify',
+  pending:   'Review',
+  none:      'Activate',
 };
 
 export default function Subscriptions() {
@@ -114,12 +117,14 @@ export default function Subscriptions() {
   const tabCount = (key) =>
     key === 'all' ? rows.length : rows.filter(r => r.status === key).length;
 
-  const pendingCount = rows.filter(r => r.status === 'pending').length;
+  // "Requests to action" = awaiting-proof (pending) + proof-submitted rows.
+  const isRequest = (r) => r.status === 'pending' || r.status === 'submitted';
+  const pendingCount = rows.filter(isRequest).length;
   // Money-tracking summary for Accounts: outstanding requests, total
   // collected on currently-active subs, count expiring in 30 days.
   const pendingAmount  = rows
-    .filter(r => r.status === 'pending')
-    .reduce((s, r) => s + (Number(r.latest?.amount_due) || 0), 0);
+    .filter(isRequest)
+    .reduce((s, r) => s + (Number(r.status === 'submitted' ? r.latest?.amount_paid : r.latest?.amount_due) || 0), 0);
   // Filter on the DERIVED status: the DB never flips status on expiry, so
   // raw status==='active' would count expired rows and every historical
   // renewal forever — contradicting the adjacent Active Subscriptions card.
@@ -163,7 +168,7 @@ export default function Subscriptions() {
               <div className="font-semibold">{pendingCount} pending subscription request(s)</div>
               <div className="text-sm text-muted">Partners are waiting for activation. Share payment details and click Review to approve.</div>
             </div>
-            <button className="btn btn-info btn-sm" onClick={() => setFilter('pending')}>View Pending</button>
+            <button className="btn btn-info btn-sm" onClick={() => setFilter(rows.some(r => r.status === 'submitted') ? 'submitted' : 'pending')}>View Requests</button>
           </div>
         </div>
       )}
@@ -203,7 +208,7 @@ export default function Subscriptions() {
                 <tr>
                   <th>Partner</th>
                   <th>Product</th>
-                  <th>Serial</th>
+                  <th>Meter Serial Number</th>
                   <th>Order</th>
                   <th>Status</th>
                   <th>Start</th>
@@ -214,21 +219,24 @@ export default function Subscriptions() {
               </thead>
               <tbody>
                 {filtered.map(r => {
-                  const isPending = r.status === 'pending';
-                  // For pending rows show the requested amount (amount_due),
-                  // otherwise the recorded payment.
+                  const isPending   = r.status === 'pending';
+                  const isSubmitted = r.status === 'submitted';
+                  const isReview    = isPending || isSubmitted; // not yet activated
+                  // Requested amount (amount_due) while pending; the partner's
+                  // claimed amount (amount_paid) once a proof is submitted;
+                  // otherwise the recorded payment on the active row.
                   const amount = isPending
                     ? r.latest?.amount_due
                     : r.latest?.amount_paid;
                   return (
-                    <tr key={r.unit.id} style={isPending ? {background:'rgba(59,130,246,0.04)'} : undefined}>
+                    <tr key={r.unit.id} style={isReview ? {background:'rgba(59,130,246,0.04)'} : undefined}>
                       <td className="text-sm">{r.partner?.name || r.partner?.company_name || '—'}</td>
                       <td className="text-sm font-semibold">{staffProductName(r.product) || '—'}</td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.serial_number || '—'}</code></td>
                       <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
                       <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
-                      <td className="text-sm">{isPending ? '—' : fmtDate(r.latest?.start_date)}</td>
-                      <td className="text-sm">{isPending ? '—' : fmtDate(r.latest?.end_date)}</td>
+                      <td className="text-sm">{isReview ? '—' : fmtDate(r.latest?.start_date)}</td>
+                      <td className="text-sm">{isReview ? '—' : fmtDate(r.latest?.end_date)}</td>
                       <td className="text-sm" style={{textAlign:'right'}}>{amount ? fmtINR(amount) : '—'}</td>
                       <td>
                         <button className="btn btn-primary btn-sm" onClick={() => setOpenUnit(r)}>
@@ -270,18 +278,22 @@ export default function Subscriptions() {
 function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
   const { addToast } = useToast();
   const latest      = row.latest;
-  const isPending   = row.status === 'pending';
-  // For pending approval the existing row gets updated. For everything else
-  // we insert a new row (activation / renewal).
-  // Default start: day after the most recent non-pending end, else today.
+  const isPending   = row.status === 'pending';   // requested, no proof yet
+  const isSubmitted = row.status === 'submitted'; // proof uploaded, awaiting verify
+  const isReview    = isPending || isSubmitted;   // partner request not yet activated
+  // For a review (pending/submitted) the existing row gets updated. For
+  // everything else we insert a new row (activation / renewal).
+  // Default start: day after the most recent active end, else today.
   const prior = (row.history || []).find(h => h.status === 'active');
-  const defaultStart = (!isPending && prior?.end_date)
+  const defaultStart = (!isReview && prior?.end_date)
     ? new Date(new Date(prior.end_date).getTime() + 86_400_000).toISOString().slice(0, 10)
     : today();
 
-  const defaultAmount = isPending
-    ? (latest?.amount_due ?? row.product?.subscription_price ?? '')
-    : (row.product?.subscription_price ?? '');
+  const defaultAmount = isSubmitted
+    ? (latest?.amount_paid ?? latest?.amount_due ?? row.product?.subscription_price ?? '')
+    : isPending
+      ? (latest?.amount_due ?? row.product?.subscription_price ?? '')
+      : (row.product?.subscription_price ?? '');
 
   const [startDate, setStartDate]     = useState(defaultStart);
   const [amount, setAmount]           = useState(defaultAmount);
@@ -315,7 +327,7 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
       if (editCreds) {
         await setDashboardCredentials(row.unit.id, { username: dashUser, password: dashPass });
       }
-      if (isPending) {
+      if (isReview) {
         await approveSubscription(latest.id, {
           startDate, amountPaid: amount, paymentDate, notes,
         });
@@ -340,13 +352,16 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
 
   const handleRejectPending = async () => {
     if (!latest?.id) return;
-    if (!window.confirm('Reject this subscription request? The partner will need to submit a new request.')) return;
+    // Optional reason — shown to the partner in the "request declined" mail.
+    const note = window.prompt('Decline this subscription request? Optionally add a reason for the partner (they will see it). The partner can submit a new request afterwards.', '');
+    if (note === null) return; // prompt cancelled
     setSaving(true);
     try {
-      // Declining a pending REQUEST — suppress the "subscription cancelled"
-      // mail (the partner never had active coverage; that wording misleads).
-      await cancelSubscription(latest.id, { notifyPartner: false });
-      await onSaved('Request rejected');
+      // Declining a pending REQUEST — sends the "request declined" mail (not
+      // the misleading "subscription cancelled" one, since the partner never
+      // had active coverage).
+      await cancelSubscription(latest.id, { mode: 'declined', note });
+      await onSaved('Request declined');
     } catch (err) {
       console.error('[subscriptions] reject failed:', err);
       addToast(err.message || 'Failed to reject request', 'error');
@@ -355,10 +370,46 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
     }
   };
 
-  const handleCancelSub = async (id) => {
-    if (!window.confirm('Cancel this subscription? It will stay in history but stop counting toward access.')) return;
+  // Reject a SUBMITTED proof (wrong/unclear slip) — sends it back to the
+  // partner as 'pending' with a note so they can re-upload. Distinct from
+  // declining a request outright.
+  const handleRejectProof = async () => {
+    const note = window.prompt('Reason for rejecting this payment proof (the partner will see it and can re-upload):');
+    if (note == null) return;
+    if (!note.trim()) { addToast('Please add a rejection reason', 'error'); return; }
+    setSaving(true);
     try {
-      await cancelSubscription(id);
+      await rejectSubscriptionProof(latest.id, note.trim());
+      await onSaved('Payment proof rejected — sent back to the partner');
+    } catch (err) {
+      console.error('[subscriptions] reject proof failed:', err);
+      addToast(err.message || 'Failed to reject proof', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Open the partner's uploaded slip. Window is opened synchronously (inside
+  // the click) so popup blockers don't swallow it after the await.
+  const openSlip = async () => {
+    const w = window.open('', '_blank');
+    if (w) w.opener = null;
+    const url = await getSubscriptionSlipUrl(latest?.receipt_url);
+    if (url) { if (w) w.location = url; else window.open(url, '_blank', 'noopener'); }
+    else { if (w) w.close(); addToast('Could not open the payment slip', 'error'); }
+  };
+
+  const handleCancelSub = async (id) => {
+    // A pending/submitted row is a REQUEST, not active coverage — declining it
+    // must send the "request declined" mail, not "subscription cancelled".
+    const target = (row.history || []).find(h => h.id === id);
+    const isRequestRow = target && (target.status === 'pending' || target.status === 'submitted');
+    const confirmMsg = isRequestRow
+      ? 'Decline this subscription request? The partner will be notified and can submit a new one.'
+      : 'Cancel this subscription? It will stay in history but stop counting toward access.';
+    if (!window.confirm(confirmMsg)) return;
+    try {
+      await cancelSubscription(id, isRequestRow ? { mode: 'declined' } : {});
       await onCancelled();
     } catch (err) {
       console.error('[subscriptions] cancel failed:', err);
@@ -366,12 +417,13 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
     }
   };
 
-  const modalTitle = isPending ? 'Review Subscription Request' :
-                     latest    ? 'Renew Subscription' :
-                                 'Activate Subscription';
-  const submitLabel = isPending ? 'Approve & Activate'
-                    : latest    ? 'Renew (+1 year)'
-                    :             'Activate (+1 year)';
+  const modalTitle = isSubmitted ? 'Verify Subscription Payment' :
+                     isPending   ? 'Review Subscription Request' :
+                     latest      ? 'Renew Subscription' :
+                                   'Activate Subscription';
+  const submitLabel = isReview ? 'Approve & Activate'
+                    : latest   ? 'Renew (+1 year)'
+                    :            'Activate (+1 year)';
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -381,12 +433,58 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
-          {isPending && (
-            <div style={{padding:'0.75rem 1rem', background:'rgba(59,130,246,0.08)', border:'1px solid var(--info)', borderRadius:'8px', marginBottom:'1rem'}}>
-              <div className="font-semibold text-sm">Partner requested this subscription on {fmtDate(latest?.created_at)}</div>
-              <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>
-                Requested amount: {fmtINR(latest?.amount_due)}. Once payment is confirmed, set the actual amount paid + date below and approve.
+          {isReview && (
+            <div style={{padding:'1rem 1.15rem', background:'rgba(59,130,246,0.06)', border:'1px solid var(--info)', borderRadius:'10px', marginBottom:'1.25rem'}}>
+              <div style={{display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:'1rem', flexWrap:'wrap'}}>
+                <div>
+                  <div className="font-semibold text-sm">
+                    {isSubmitted ? 'Payment proof submitted' : 'Subscription requested'}
+                  </div>
+                  <div className="text-xs text-muted" style={{marginTop:'0.15rem'}}>
+                    {isSubmitted ? 'Uploaded' : 'Requested'} on {fmtDate(latest?.created_at)} by {row.partner?.name || row.partner?.company_name || 'the partner'}
+                  </div>
+                </div>
+                {isSubmitted && latest?.receipt_url && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={openSlip}
+                    style={{display:'inline-flex', alignItems:'center', gap:'0.4rem', whiteSpace:'nowrap'}}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    View Payment Slip
+                  </button>
+                )}
               </div>
+
+              {isSubmitted ? (
+                <>
+                  <div style={{display:'flex', gap:'1.75rem', flexWrap:'wrap', marginTop:'0.85rem', paddingTop:'0.85rem', borderTop:'1px solid var(--border)'}}>
+                    <div>
+                      <div className="text-xs text-muted">Claimed amount</div>
+                      <div className="font-semibold" style={{fontSize:'1.05rem', color:'var(--primary)'}}>{fmtINR(latest?.amount_paid)}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-muted">Method</div>
+                      <div className="font-semibold text-sm">{PAYMENT_METHOD_LABEL[latest?.payment_method] || '—'}</div>
+                    </div>
+                    <div>
+                      <div className="text-xs text-muted">Paid on</div>
+                      <div className="font-semibold text-sm">{fmtDate(latest?.payment_date)}</div>
+                    </div>
+                  </div>
+                  <div className="text-xs text-muted" style={{marginTop:'0.75rem'}}>
+                    Open the slip, confirm the amount &amp; start date below, then approve.
+                  </div>
+                </>
+              ) : (
+                <div className="text-xs text-muted" style={{marginTop:'0.5rem'}}>
+                  Requested amount: <b>{fmtINR(latest?.amount_due)}</b>. Waiting on the partner's payment proof — or set the amount + date below and approve directly if paid offline.
+                </div>
+              )}
             </div>
           )}
 
@@ -394,7 +492,7 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
             <div className="text-xs text-muted">Device</div>
             <div className="font-semibold">{staffProductName(row.product) || 'Unknown product'}</div>
             <div className="text-sm" style={{marginTop:'0.25rem'}}>
-              Serial: <code>{row.unit.serial_number || '—'}</code>
+              Meter Serial Number: <code>{row.unit.serial_number || '—'}</code>
               {row.unit.sim && <> &middot; SIM: <code>{row.unit.sim}</code></>}
             </div>
             <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>
@@ -521,8 +619,11 @@ function SubscriptionModal({ row, onClose, onSaved, onCancelled }) {
         </div>
         <div className="modal-footer">
           <button className="btn btn-secondary" disabled={saving} onClick={onClose}>Close</button>
+          {isSubmitted && (
+            <button className="btn btn-danger" disabled={saving} onClick={handleRejectProof}>Reject Proof</button>
+          )}
           {isPending && (
-            <button className="btn btn-danger" disabled={saving} onClick={handleRejectPending}>Reject Request</button>
+            <button className="btn btn-danger" disabled={saving} onClick={handleRejectPending}>Decline Request</button>
           )}
           <button className="btn btn-primary" disabled={saving} onClick={handleSave}>
             {saving ? 'Saving...' : submitLabel}

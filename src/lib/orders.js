@@ -242,7 +242,11 @@ export async function proposeDeliveryDate(orderId, date, note) {
   if (!date)          throw new Error('Please pick a proposed date');
   if (!note?.trim())  throw new Error('Please add a note for the partner');
 
-  const { error } = await supabase
+  // Guard on the pending state (like confirm/reject/accept/decline) so two
+  // admins — or a stale tab after the partner already accepted/declined —
+  // can't counter an order that has moved on. The 0-row check stops a
+  // spurious "new delivery date" email firing on a no-op update.
+  const { data: updated, error } = await supabase
     .from('bridgethings_orders')
     .update({
       proposed_delivery_date:      date,
@@ -250,8 +254,11 @@ export async function proposeDeliveryDate(orderId, date, note) {
       delivery_negotiation_status: 'counter_sent',
       updated_at:                  new Date().toISOString(),
     })
-    .eq('id', orderId);
+    .eq('id', orderId)
+    .eq('status', 'pending_approval')
+    .select('id');
   if (error) throw error;
+  if (!updated?.length) throw new Error('This PO is no longer awaiting confirmation (it may have been confirmed, rejected, or already answered). Please refresh.');
 
   // Notify the partner of the counter-proposed delivery date.
   const party = await loadOrderParty(orderId);
@@ -472,8 +479,8 @@ export function derivePartnerStatusLabel(order) {
   const any = (s) => items.some(i => (i.production_status || 'hold') === s);
   // 'hold' is the default state every unit lands in at creation — the partner
   // doesn't need to know about it. Collapse into the generic "In Progress"
-  // so they only see forward movement (In Production → Sent for Dispatch).
-  if (all('ready_to_dispatch'))  return { label: 'Sent for Dispatch', className: 'badge-warning' };
+  // so they only see forward movement (In Production → Sent to Dispatch).
+  if (all('ready_to_dispatch'))  return { label: 'Sent to Dispatch', className: 'badge-warning' };
   if (any('production') || any('ready_to_dispatch') || any('sent_back'))
     return { label: 'In Production', className: 'badge-info' };
   return { label: 'In Progress', className: 'badge-info' };
@@ -611,7 +618,7 @@ export function useOrderStatusBreakdown(orderIds) {
  * partnerStatusBadges(counts)
  *   Maps the breakdown counts from useOrderStatusBreakdown into a list of
  *   partner-facing badge descriptors. Order is forward-flow:
- *     In Production → Sent for Dispatch → Shipped → Delivered
+ *     In Production → Sent to Dispatch → Shipped → Delivered
  *   Empty buckets are skipped, so partners only see badges that mean
  *   something for this specific order.
  */
@@ -623,7 +630,7 @@ export function partnerStatusBadges(counts) {
   const delivered = counts.delivered || 0;
   const badges = [];
   if (inProd > 0)    badges.push({ label: `${inProd} In Production`,    cls: 'badge-info' });
-  if (ready > 0)     badges.push({ label: `${ready} Sent for Dispatch`, cls: 'badge-warning' });
+  if (ready > 0)     badges.push({ label: `${ready} Sent to Dispatch`, cls: 'badge-warning' });
   if (shipped > 0)   badges.push({ label: `${shipped} Shipped`,         cls: 'badge-purple' });
   if (delivered > 0) badges.push({ label: `${delivered} Delivered`,     cls: 'badge-success' });
   return badges;
@@ -634,7 +641,7 @@ export const OPS_STATUS_BADGE = {
   hold:              { cls: 'badge-info',    label: 'In Progress' },
   production:        { cls: 'badge-info',    label: 'In Production' },
   partial_ready:     { cls: 'badge-warning', label: 'Partial Ready' },
-  ready_to_dispatch: { cls: 'badge-warning', label: 'Sent for Dispatch' },
+  ready_to_dispatch: { cls: 'badge-warning', label: 'Sent to Dispatch' },
   sent_back:         { cls: 'badge-danger',  label: 'Sent Back' },
   dispatched:        { cls: 'badge-success', label: 'Dispatched' },
 };
@@ -649,7 +656,7 @@ export const ITEM_PRODUCTION_STATUSES = [
   // rather than reading it as "ops chose to hold this".
   { value: 'hold',              label: 'In Progress' },
   { value: 'production',        label: 'In Production' },
-  { value: 'ready_to_dispatch', label: 'Sent for Dispatch' },
+  { value: 'ready_to_dispatch', label: 'Sent to Dispatch' },
   { value: 'sent_back',         label: 'Sent Back to Ops' },
   { value: 'dispatched',        label: 'Dispatched' },
 ];

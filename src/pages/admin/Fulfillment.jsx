@@ -34,7 +34,7 @@ const OPS_TAB_LABELS  = {
   hold:              'In Progress',
   production:        'In Production',
   partial_ready:     'Partial Ready',
-  ready_to_dispatch: 'Sent for Dispatch',
+  ready_to_dispatch: 'Sent to Dispatch',
   sent_back:         'Sent Back',
 };
 
@@ -860,7 +860,7 @@ function UnitsTab({ team, items, units, onUpdateUnit, onChanged, view = 'active'
           ? 'Verify each unit below. Tick any wrong unit(s) and click Send Back to Operations with a note.'
           : isOpsSent
             ? 'Units already handed off to dispatch. You can still edit details (e.g. a cert URL that came in late) and click Save Updates — status is locked once sent.'
-            : 'Fill in serial, SIM, calibration and certificate URLs. Set per-unit status (In Progress / In Production / Sent for Dispatch). Tick the units to hand off and click Send to Dispatch.'}
+            : 'Fill in serial, SIM, calibration and certificate URLs. Set per-unit status (In Progress / In Production / Sent to Dispatch). Tick the units to hand off and click Send to Dispatch.'}
       </div>
 
       {/* Bulk action bar — picks are at the unit level. Hidden in the ops
@@ -1003,7 +1003,7 @@ function ItemUnitsEditor({ item, units, onUpdate, team = 'operations', frozen = 
     return acc;
   }, {});
   const order = ['hold', 'production', 'ready_to_dispatch', 'sent_back', 'dispatched'];
-  const label = { hold: 'In Progress', production: 'In Production', ready_to_dispatch: 'Sent for Dispatch', sent_back: 'Sent Back', dispatched: 'Dispatched' };
+  const label = { hold: 'In Progress', production: 'In Production', ready_to_dispatch: 'Sent to Dispatch', sent_back: 'Sent Back', dispatched: 'Dispatched' };
   const cls   = { hold: 'badge-info', production: 'badge-info', ready_to_dispatch: 'badge-warning', sent_back: 'badge-danger', dispatched: 'badge-success' };
 
   // Field edits: only dispatch is read-only. Ops keeps editing rights even
@@ -1065,7 +1065,7 @@ function UnitRow({ unit, onChange, fieldsReadOnly = false, actionsLocked = false
   const statusBadge = {
     hold:              { className: 'badge-info',    label: 'In Progress' },
     production:        { className: 'badge-info',    label: 'In Production' },
-    ready_to_dispatch: { className: 'badge-warning', label: 'Sent for Dispatch' },
+    ready_to_dispatch: { className: 'badge-warning', label: 'Sent to Dispatch' },
     sent_back:         { className: 'badge-danger',  label: 'Sent Back' },
     dispatched:        { className: 'badge-success', label: 'Dispatched' },
   }[status] || { className: 'badge-gray', label: status };

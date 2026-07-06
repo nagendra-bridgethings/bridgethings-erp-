@@ -4,14 +4,22 @@
 // Partner can select devices that need a sub (none/expired/expiring) and
 // submit a Subscription Request — staff then activate once payment lands.
 // Once active, partner can view the dashboard login captured by Accounts.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../lib/auth';
 import { useToast } from '../../lib/toast';
 import {
-  useUnitSubscriptions, requestSubscriptions,
+  useUnitSubscriptions, requestSubscriptions, submitSubscriptionProof,
+  getDashboardCredentials,
   effectiveStatus, daysRemaining, latestSubFor, coverageSubFor,
 } from '../../lib/subscriptions';
+import { PAYMENT_METHODS } from '../../lib/payments';
 import { orderRef } from '../../lib/orders';
+
+const todayLocal = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+};
 
 const fmtINR  = n => '₹' + Number(n || 0).toLocaleString('en-IN');
 const fmtDate = d => d ? new Date(d).toLocaleDateString('en-IN', {day:'2-digit',month:'short',year:'numeric'}) : '—';
@@ -19,20 +27,21 @@ const shortId = id => id ? id.slice(0, 8).toUpperCase() : '';
 
 const STATUS_LABELS = {
   active:'Active', expiring_soon:'Expiring Soon', expired:'Expired',
-  pending:'Requested', cancelled:'Cancelled', none:'No Subscription',
+  pending:'Requested', submitted:'Payment Submitted', cancelled:'Cancelled', none:'No Subscription',
 };
 const STATUS_COLORS = {
   active:'badge-success', expiring_soon:'badge-warning', expired:'badge-danger',
-  pending:'badge-info', cancelled:'badge-gray', none:'badge-gray',
+  pending:'badge-info', submitted:'badge-purple', cancelled:'badge-gray', none:'badge-gray',
 };
 
 // Statuses a partner can request/renew a subscription for.
 const SELECTABLE_STATUSES = ['none', 'expired', 'expiring_soon'];
 
-const TAB_FILTERS = ['all', 'active', 'expiring_soon', 'expired', 'none', 'pending'];
+const TAB_FILTERS = ['all', 'active', 'expiring_soon', 'expired', 'none', 'pending', 'submitted'];
 
 export default function PartnerDevices() {
   const { addToast } = useToast();
+  const { user } = useAuth();
   const { subs, loading: subsLoading, reload: reloadSubs } = useUnitSubscriptions();
   const [units, setUnits] = useState([]);
   const [unitsLoading, setUnitsLoading] = useState(true);
@@ -41,6 +50,7 @@ export default function PartnerDevices() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [credsRow, setCredsRow] = useState(null);
+  const [proofRow, setProofRow] = useState(null);
   const [search, setSearch] = useState('');
 
   // RLS scopes order_unit_details to the partner's own units automatically
@@ -56,10 +66,16 @@ export default function PartnerDevices() {
     (async () => {
       setUnitsLoading(true);
       await supabase.auth.getSession();
+      // Explicit columns — do NOT select dashboard_password (it would ship in
+      // the payload for every unit regardless of subscription; RLS is
+      // row-level only). The password is fetched on demand via a coverage-
+      // gated RPC. dashboard_username stays (login id, needed for search).
       const { data, error } = await supabase
         .from('bridgethings_order_unit_details')
         .select(`
-          *,
+          id, order_item_id, unit_index, serial_number, sim, sim_number,
+          production_status, calibration_certificate_url, warranty_certificate_url,
+          dashboard_username, created_at,
           item:bridgethings_order_items!inner(
             id, qty,
             order:bridgethings_orders!inner(id, delivered_date, fulfillment_status, partner_po_number),
@@ -209,7 +225,10 @@ export default function PartnerDevices() {
           <div><div className="stat-label">Expiring in 30 days</div><div className="stat-value" style={{color:'var(--warning)'}}>{expiringSoon}</div></div>
         </div>
         <div className="stat-card">
-          <div><div className="stat-label">Expired / Missing</div><div className="stat-value" style={{color:'var(--danger)'}}>{expired + missing}</div></div>
+          <div><div className="stat-label">Expired</div><div className="stat-value" style={{color:'var(--danger)'}}>{expired}</div></div>
+        </div>
+        <div className="stat-card">
+          <div><div className="stat-label">Missing</div><div className="stat-value" style={{color:'var(--text)'}}>{missing}</div></div>
         </div>
       </div>
 
@@ -269,7 +288,7 @@ export default function PartnerDevices() {
                     />
                   </th>
                   <th>Product</th>
-                  <th>Serial</th>
+                  <th>Meter Serial Number</th>
                   <th>SIM</th>
                   <th>SIM Number</th>
                   <th>Order</th>
@@ -288,9 +307,16 @@ export default function PartnerDevices() {
                   // the newest row — a pending renewal request must not hide
                   // dates/credentials of a subscription that's still valid.
                   const coverageStatus = effectiveStatus(r.coverage);
-                  const days = daysRemaining(r.coverage || r.latest);
+                  // A pending/submitted request with NO paid coverage carries a
+                  // placeholder end_date (today+1yr) — don't show it as real
+                  // coverage. Mirror the admin page which renders '—' for these.
+                  const isReviewRow = r.status === 'pending' || r.status === 'submitted';
+                  const showCoverageDates = !(isReviewRow && !r.coverage);
+                  const days = showCoverageDates ? daysRemaining(r.coverage || r.latest) : null;
                   const selectable = SELECTABLE_STATUSES.includes(r.status);
-                  const hasCreds   = Boolean(r.unit.dashboard_username || r.unit.dashboard_password);
+                  // Password isn't in the payload — presence of a username
+                  // (always set alongside the password by staff) marks creds.
+                  const hasCreds   = Boolean(r.unit.dashboard_username);
                   const canViewCreds = hasCreds && (coverageStatus === 'active' || coverageStatus === 'expiring_soon');
                   return (
                     <tr key={r.unit.id}>
@@ -308,8 +334,25 @@ export default function PartnerDevices() {
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim || '—'}</code></td>
                       <td className="text-sm"><code style={{fontSize:'0.8rem'}}>{r.unit.sim_number || '—'}</code></td>
                       <td className="text-sm"><span style={{color:'var(--primary)'}}>{orderRef(r.unit.item?.order)}</span></td>
-                      <td><span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span></td>
-                      <td className="text-sm">{fmtDate((r.coverage || r.latest)?.end_date)}</td>
+                      <td>
+                        <span className={`badge ${STATUS_COLORS[r.status]}`}>{STATUS_LABELS[r.status]}</span>
+                        {r.status === 'pending' && r.latest?.id && (
+                          <div style={{marginTop:'0.35rem'}}>
+                            <button className="btn btn-primary btn-sm" onClick={() => setProofRow(r)}>
+                              {r.latest.rejection_note ? 'Re-upload Proof' : 'Upload Payment Proof'}
+                            </button>
+                            {r.latest.rejection_note && (
+                              <div className="text-xs" style={{color:'var(--danger)', marginTop:'0.25rem', maxWidth:'180px'}}>
+                                Rejected: {r.latest.rejection_note}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        {r.status === 'submitted' && (
+                          <div className="text-xs text-muted" style={{marginTop:'0.35rem'}}>Proof sent — awaiting verification</div>
+                        )}
+                      </td>
+                      <td className="text-sm">{showCoverageDates ? fmtDate((r.coverage || r.latest)?.end_date) : '—'}</td>
                       <td className="text-sm">
                         {days == null ? '—' : days < 0 ? `${Math.abs(days)} ago` : days}
                       </td>
@@ -366,6 +409,15 @@ export default function PartnerDevices() {
         <CredentialsModal row={credsRow} onClose={() => setCredsRow(null)} />
       )}
 
+      {proofRow && (
+        <ProofModal
+          row={proofRow}
+          partnerId={user?.supabaseId}
+          onClose={() => setProofRow(null)}
+          onSubmitted={async () => { await reloadSubs(); setProofRow(null); }}
+        />
+      )}
+
       {showConfirm && (
         <div className="modal-overlay" onClick={() => !submitting && setShowConfirm(false)}>
           <div className="modal modal-lg" onClick={e => e.stopPropagation()} style={{maxWidth:'640px'}}>
@@ -382,7 +434,7 @@ export default function PartnerDevices() {
                   <thead>
                     <tr>
                       <th>Product</th>
-                      <th>Serial</th>
+                      <th>Meter Serial Number</th>
                       <th style={{textAlign:'right'}}>Price (₹/yr)</th>
                     </tr>
                   </thead>
@@ -420,11 +472,110 @@ export default function PartnerDevices() {
   );
 }
 
+// Partner uploads their payment bill + amount + slip against a pending
+// subscription request. Amount pre-fills to the quoted price; accountant
+// verifies afterward.
+function ProofModal({ row, partnerId, onClose, onSubmitted }) {
+  const { addToast } = useToast();
+  const sub = row.latest;
+  const [amount, setAmount]           = useState(String(sub?.amount_due ?? row.price ?? ''));
+  const [paymentDate, setPaymentDate] = useState(todayLocal());
+  const [method, setMethod]           = useState('bank_transfer');
+  const [file, setFile]               = useState(null);
+  const [saving, setSaving]           = useState(false);
+  const fileRef = useRef(null);
+
+  const submit = async () => {
+    if (!file) { addToast('Please attach the payment slip', 'error'); return; }
+    setSaving(true);
+    try {
+      await submitSubscriptionProof({
+        subId: sub.id, partnerId, amount, paymentDate, method, file,
+      });
+      addToast('Payment proof submitted — our team will verify and activate your subscription.', 'success');
+      await onSubmitted();
+    } catch (err) {
+      console.error('[devices] proof submit failed:', err);
+      addToast(err.message || 'Failed to submit payment proof', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={() => !saving && onClose()}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{maxWidth:'520px'}}>
+        <div className="modal-header">
+          <h3>Upload Payment Proof</h3>
+          <button className="modal-close" onClick={onClose} disabled={saving}>✕</button>
+        </div>
+        <div className="modal-body">
+          <div style={{padding:'0.85rem 1rem', background:'var(--bg)', borderRadius:'8px', marginBottom:'1rem'}}>
+            <div className="text-xs text-muted">Device</div>
+            <div className="font-semibold">{row.unit.item?.product?.name || 'Unknown product'}</div>
+            <div className="text-sm" style={{marginTop:'0.25rem'}}>Meter Serial Number: <code>{row.unit.serial_number || '—'}</code></div>
+          </div>
+          {sub?.rejection_note && (
+            <div style={{padding:'0.6rem 0.85rem', background:'var(--danger-bg)', border:'1px solid var(--danger)', borderRadius:'8px', marginBottom:'1rem'}}>
+              <div className="text-sm" style={{color:'var(--danger)'}}>Your previous proof was rejected: {sub.rejection_note}</div>
+            </div>
+          )}
+          <div className="form-group">
+            <label className="form-label">Amount Paid (₹)</label>
+            <input type="number" min="0" step="0.01" className="form-input" value={amount} onChange={e => setAmount(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Payment Date</label>
+            <input type="date" className="form-input" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} />
+          </div>
+          <div className="form-group">
+            <label className="form-label">Payment Method</label>
+            <select className="form-select" value={method} onChange={e => setMethod(e.target.value)}>
+              {PAYMENT_METHODS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Payment Slip / Bill</label>
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" className="form-input"
+              onChange={e => setFile(e.target.files?.[0] || null)} />
+            <div className="text-xs text-muted" style={{marginTop:'0.25rem'}}>PDF or image of the receipt/bank slip.</div>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
+          <button className="btn btn-primary" onClick={submit} disabled={saving}>
+            {saving ? 'Submitting...' : 'Submit Proof'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CredentialsModal({ row, onClose }) {
   const [showPass, setShowPass] = useState(false);
   const [copied, setCopied]     = useState(null); // 'user' | 'pass' | null
-  const username = row.unit.dashboard_username || '';
-  const password = row.unit.dashboard_password || '';
+  // The password is NOT in the device payload — fetch it (and the username)
+  // through the coverage-gated RPC when the modal opens.
+  const [creds, setCreds]   = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]   = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const c = await getDashboardCredentials(row.unit.id);
+        if (!cancelled) setCreds(c);
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Could not load credentials');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [row.unit.id]);
+  const username = creds?.username || row.unit.dashboard_username || '';
+  const password = creds?.password || '';
 
   const copy = async (text, kind) => {
     try {
@@ -448,10 +599,16 @@ function CredentialsModal({ row, onClose }) {
             <div className="text-xs text-muted">Device</div>
             <div className="font-semibold">{row.unit.item?.product?.name || 'Unknown product'}</div>
             <div className="text-sm" style={{marginTop:'0.25rem'}}>
-              Serial: <code>{row.unit.serial_number || '—'}</code>
+              Meter Serial Number: <code>{row.unit.serial_number || '—'}</code>
             </div>
           </div>
 
+          {loading ? (
+            <div className="text-sm text-muted" style={{padding:'0.5rem 0'}}>Loading credentials…</div>
+          ) : error ? (
+            <div className="text-sm" style={{color:'var(--danger)', padding:'0.5rem 0'}}>{error}</div>
+          ) : (
+          <>
           <div className="form-group">
             <label className="form-label">Username</label>
             <div style={{display:'flex', gap:'0.4rem', alignItems:'center'}}>
@@ -483,6 +640,8 @@ function CredentialsModal({ row, onClose }) {
           <div className="text-xs text-muted" style={{marginTop:'0.5rem'}}>
             Keep these credentials confidential. Contact Bridge Things if you need them reset.
           </div>
+          </>
+          )}
         </div>
         <div className="modal-footer">
           <button className="btn btn-primary" onClick={onClose}>Close</button>

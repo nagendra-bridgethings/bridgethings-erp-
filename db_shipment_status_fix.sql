@@ -84,10 +84,12 @@ BEGIN
     WHERE id = p_order_id;
   ELSIF v_total_shipped >= v_total_ordered AND v_pending_count = 0 THEN
     -- Fully shipped and every shipped parcel delivered.
+    -- COALESCE keeps the partner's PO-time courier if the latest shipped
+    -- parcel has no courier set (don't blank an existing delivery_method).
     UPDATE bridgethings_orders
     SET fulfillment_status = 'delivered',
         status             = 'completed',
-        delivery_method    = v_latest_courier,
+        delivery_method    = COALESCE(v_latest_courier, delivery_method),
         tracking_number    = v_latest_tracking,
         delivered_date     = (SELECT MAX(delivered_date)
                               FROM bridgethings_shipments WHERE order_id = p_order_id),
@@ -97,7 +99,7 @@ BEGIN
     -- At least one parcel actually shipped, but not all delivered.
     UPDATE bridgethings_orders
     SET fulfillment_status = 'shipped',
-        delivery_method    = v_latest_courier,
+        delivery_method    = COALESCE(v_latest_courier, delivery_method),
         tracking_number    = v_latest_tracking,
         delivered_date     = NULL,
         updated_at         = NOW()
@@ -111,6 +113,31 @@ CREATE OR REPLACE FUNCTION bridgethings_rollup_shipments()
 RETURNS TRIGGER AS $$
 DECLARE v_order_id UUID;
 BEGIN
+  -- Skip a shipments UPDATE that changed none of the fields the rollup reads
+  -- (tracking / delivered / courier) — e.g. a partner_docs_status flip. The
+  -- recompute would be a no-op but still churns orders.updated_at + writes an
+  -- audit row attributed to whoever made the unrelated change.
+  --
+  -- The NEW-field checks are NESTED under the table guard on purpose: this
+  -- function is ALSO attached to bridgethings_shipment_items, whose rows have
+  -- no tracking_number/delivered_date/courier. Postgres resolves NEW.<field>
+  -- for a shipment_items row even when a sibling AND-conjunct is false, so a
+  -- flat "AND NEW.tracking_number ..." raises
+  -- 'record "new" has no field "tracking_number"' on every shipment_items
+  -- INSERT/UPDATE/DELETE. Nesting means the field refs are only reached for a
+  -- shipments UPDATE.
+  IF TG_TABLE_NAME = 'bridgethings_shipments' AND TG_OP = 'UPDATE' THEN
+    -- shipped_date is included because recompute picks the "latest" parcel's
+    -- courier/tracking by shipped_date DESC — editing it can change which
+    -- parcel is latest, so a shipped_date-only edit must still recompute.
+    IF NEW.tracking_number IS NOT DISTINCT FROM OLD.tracking_number
+       AND NEW.delivered_date  IS NOT DISTINCT FROM OLD.delivered_date
+       AND NEW.courier         IS NOT DISTINCT FROM OLD.courier
+       AND NEW.shipped_date    IS NOT DISTINCT FROM OLD.shipped_date THEN
+      RETURN NULL;
+    END IF;
+  END IF;
+
   IF TG_TABLE_NAME = 'bridgethings_shipment_items' THEN
     SELECT s.order_id INTO v_order_id
     FROM bridgethings_shipments s
@@ -154,11 +181,16 @@ BEGIN
   v_diff := v_target - v_current;
 
   IF v_diff > 0 THEN
-    -- Promote non-dispatched units (prefer ready_to_dispatch) to dispatched.
+    -- Promote ONLY units ops has marked 'ready_to_dispatch' — never sweep in
+    -- units still in production/hold/sent_back. Combined with the client cap
+    -- (a parcel can't include more than the ready units), a plan parcel that
+    -- gets its AWB can never dispatch an unfinished unit. If somehow fewer
+    -- ready units exist than the parcel claims, we dispatch only the ready
+    -- ones rather than shipping unfinished product.
     WITH candidates AS (
       SELECT id FROM bridgethings_order_unit_details
-      WHERE order_item_id = p_order_item_id AND production_status <> 'dispatched'
-      ORDER BY CASE production_status WHEN 'ready_to_dispatch' THEN 0 ELSE 1 END, unit_index
+      WHERE order_item_id = p_order_item_id AND production_status = 'ready_to_dispatch'
+      ORDER BY unit_index
       LIMIT v_diff
     )
     UPDATE bridgethings_order_unit_details ud

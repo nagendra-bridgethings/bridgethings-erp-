@@ -263,6 +263,7 @@ export default function ShipmentsPanel({ order, items, partner, unitCountsByItem
                   order={order}
                   items={items}
                   remaining={remaining}
+                  unitCountsByItem={unitCountsByItem}
                   onCancel={() => setCreating(false)}
                   onSaved={async () => {
                     setCreating(false);
@@ -654,30 +655,43 @@ function ShipmentCard({ shipment, index, total, items, order, busy, onDeliver, o
   );
 }
 
-function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
+function NewShipmentForm({ order, items, remaining, unitCountsByItem = {}, onCancel, onSaved }) {
   const { addToast } = useToast();
-  // Default qty for each order_item = its remaining qty. Admin trims down
-  // to whatever's actually being shipped.
+  // Max units of an order line that can go into a NEW parcel = the units OPS
+  // has marked 'ready_to_dispatch' and not already put in another parcel
+  // (ready − packed), bounded by the allocation remaining. This stops a plan
+  // parcel from sweeping in units still in production and then auto-dispatching
+  // them when the AWB lands. When per-unit counts aren't loaded yet
+  // (unitCountsByItem empty), fall back to the allocation remaining so
+  // shipment creation is never blocked.
+  const countsLoaded = Object.keys(unitCountsByItem).length > 0;
+  const maxFor = (id) => {
+    const rem = remaining[id]?.remaining || 0;
+    if (!countsLoaded) return rem;
+    const ready  = unitCountsByItem[id]?.ready_to_dispatch || 0;
+    const packed = Math.max(0, (remaining[id]?.shipped || 0) - (remaining[id]?.dispatched || 0));
+    return Math.max(0, Math.min(rem, ready - packed));
+  };
+  // Default qty for each order_item = its ready-to-ship max. Admin trims down.
   const initial = (items || []).reduce((acc, it) => {
-    acc[it.id] = remaining[it.id]?.remaining || 0;
+    acc[it.id] = maxFor(it.id);
     return acc;
   }, {});
   const [qtys, setQtys]     = useState(initial);
-  // Re-clamp if `remaining` shrinks while the form is open (another
-  // session shipped, or the shipments list refreshed) — otherwise a stale
-  // pre-filled qty survives in a disabled input and Save submits it.
-  // Render-time "adjust state when props change" pattern, keyed on the
-  // remaining values (the prop object itself is rebuilt every render).
-  const remainingKey = JSON.stringify(Object.keys(remaining).sort().map(id => [id, remaining[id]?.remaining || 0]));
-  const [syncedRemainingKey, setSyncedRemainingKey] = useState(remainingKey);
-  if (remainingKey !== syncedRemainingKey) {
-    setSyncedRemainingKey(remainingKey);
+  // Re-clamp if the per-item max shrinks while the form is open (another
+  // session shipped, ops changed unit status, or the lists refreshed) —
+  // otherwise a stale pre-filled qty survives in a disabled input and Save
+  // submits it. Render-time "adjust state when props change" pattern.
+  const maxKey = JSON.stringify((items || []).map(it => [it.id, maxFor(it.id)]));
+  const [syncedMaxKey, setSyncedMaxKey] = useState(maxKey);
+  if (maxKey !== syncedMaxKey) {
+    setSyncedMaxKey(maxKey);
     setQtys(prev => {
       const next = { ...prev };
       let changed = false;
       for (const id of Object.keys(next)) {
-        const max = remaining[id]?.remaining || 0;
-        if (next[id] > max) { next[id] = max; changed = true; }
+        const m = maxFor(id);
+        if (next[id] > m) { next[id] = m; changed = true; }
       }
       return changed ? next : prev;
     });
@@ -720,7 +734,7 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
   };
 
   const setQty = (id, value) => {
-    const max = remaining[id]?.remaining || 0;
+    const max = maxFor(id);
     const n   = Math.max(0, Math.min(max, Math.floor(Number(value) || 0)));
     setQtys(prev => ({ ...prev, [id]: n }));
   };
@@ -732,9 +746,10 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
   // only and lets dispatch request docs later from inside the card.
   const persistShipment = async ({ requestDocs }) => {
     if (totalQty <= 0) { addToast('Add at least one item to the shipment', 'error'); return; }
-    // Belt & braces against a stale form: never submit more than remaining.
-    const over = Object.entries(qtys).find(([id, q]) => Number(q) > (remaining[id]?.remaining || 0));
-    if (over) { addToast('A quantity exceeds what remains unshipped — please review the items', 'error'); return; }
+    // Belt & braces against a stale form: never submit more than the ready-to-
+    // ship max (ops-ready units not already parceled).
+    const over = Object.entries(qtys).find(([id, q]) => Number(q) > maxFor(id));
+    if (over) { addToast('A quantity exceeds the units ops has marked ready to dispatch — please review the items', 'error'); return; }
     if (!courier.trim()) { addToast('Pick a courier', 'error'); return; }
     if (requestDocs && (!dropShip || docPicks.size === 0)) {
       addToast('Tick at least one document to request', 'error');
@@ -804,12 +819,14 @@ function NewShipmentForm({ order, items, remaining, onCancel, onSaved }) {
       {/* Per-item qty inputs */}
       <div style={{display:'flex', flexDirection:'column', gap:'0.5rem', marginBottom:'1rem'}}>
         {items.map(item => {
-          const max = remaining[item.id]?.remaining || 0;
+          const max = maxFor(item.id);
           return (
             <div key={item.id} style={{display:'flex', justifyContent:'space-between', alignItems:'center', gap:'0.75rem', flexWrap:'wrap'}}>
               <div>
                 <div className="font-semibold text-sm">{staffProductName(item.product) || 'Item'}</div>
-                <div className="text-xs text-muted">{max} remaining of {item.qty}</div>
+                <div className="text-xs text-muted">
+                  {countsLoaded ? `${max} ready to ship` : `${max} remaining`} of {item.qty}
+                </div>
               </div>
               <input
                 type="number"

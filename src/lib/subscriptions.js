@@ -7,9 +7,12 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from './supabase';
-import { notify, loadOrderParty } from './notify';
+import { notify, loadOrderParty, fmtAmount } from './notify';
 
 const TABLE = 'bridgethings_unit_subscriptions';
+// Reuse the order payment-slips bucket (staff read every slip; partners read
+// their own uid folder) — subscription slips live under a subscriptions/ path.
+const SLIP_BUCKET = 'bridgethings-payment-slips';
 
 // Resolve everything a subscription mail needs from a unit id:
 // the parent order's partner (email/name) + the product name + serial.
@@ -48,6 +51,7 @@ export function addOneYear(isoDate) {
 export function effectiveStatus(sub) {
   if (!sub) return 'none';
   if (sub.status === 'cancelled') return 'cancelled';
+  if (sub.status === 'submitted') return 'submitted'; // proof uploaded, awaiting accountant
   if (sub.status === 'pending')   return 'pending';
   const today = new Date(); today.setHours(0,0,0,0);
   const end   = new Date(sub.end_date);
@@ -151,11 +155,14 @@ export async function createSubscription({
 // Admin can cancel a subscription (mistake, refund, etc.). The row stays
 // for the audit trail; UI just stops counting it.
 //
-// notifyPartner=false is passed when this is used to REJECT a partner's
-// still-pending request (not an active subscription): the partner never
-// had coverage, so the "your subscription was cancelled" mail would be
-// misleading. The decline is surfaced in-app instead.
-export async function cancelSubscription(id, { notifyPartner = true } = {}) {
+// mode picks the partner email:
+//   'cancelled' — an ACTIVE subscription was cancelled (default)
+//   'declined'  — a still-PENDING request was declined (partner never had
+//                 coverage, so "cancelled" wording would mislead) → sends
+//                 the "request declined" mail instead. `note` (optional) is
+//                 shown to the partner as the reason.
+//   'none'      — send no email
+export async function cancelSubscription(id, { mode = 'cancelled', note } = {}) {
   const { data, error } = await supabase
     .from(TABLE)
     .update({ status: 'cancelled', updated_at: new Date().toISOString() })
@@ -164,13 +171,13 @@ export async function cancelSubscription(id, { notifyPartner = true } = {}) {
     .maybeSingle();
   if (error) throw error;
 
-  // Let the partner know a subscription was cancelled.
-  if (notifyPartner && data?.unit_id) {
+  if (mode !== 'none' && data?.unit_id) {
     const ctx = await unitContext(data.unit_id);
     if (ctx.party?.partner?.email) {
-      notify('sub_cancelled',
+      notify(mode === 'declined' ? 'sub_request_declined' : 'sub_cancelled',
         { email: ctx.party.partner.email, role: 'partner', userId: ctx.party.partner.id },
-        { partnerName: ctx.party.partner.name, productName: ctx.productName, serial: ctx.serial },
+        { partnerName: ctx.party.partner.name, productName: ctx.productName, serial: ctx.serial,
+          notes: note?.trim() || '' },
         { relatedOrderId: ctx.orderId });
     }
   }
@@ -203,6 +210,102 @@ export async function requestSubscriptions(items) {
       deviceCount: String(items.length) },
     { relatedOrderId: ctx.orderId });
   return data;
+}
+
+// Partner uploads a payment slip + claimed amount against their own pending
+// subscription request. Uploads the slip to the private bucket, then flips the
+// row to 'submitted' via the SECURITY DEFINER RPC (partners have no direct
+// UPDATE on the table). Accountants then verify it. Fires sub_payment_submitted
+// so accounts know a proof has landed and is ready to check.
+export async function submitSubscriptionProof({
+  subId, partnerId, amount, paymentDate, method, file,
+}) {
+  if (!subId)                         throw new Error('subId is required');
+  if (!partnerId)                     throw new Error('partnerId is required');
+  if (!amount || Number(amount) <= 0) throw new Error('Amount must be greater than zero');
+  if (!paymentDate)                   throw new Error('Payment date is required');
+  if (!file)                          throw new Error('Please attach the payment slip');
+
+  // Path begins with the partner uid so the storage RLS allows the upload.
+  const ext  = (file.name.split('.').pop() || 'pdf').toLowerCase();
+  const path = `${partnerId}/subscriptions/${subId}/${Date.now()}.${ext}`;
+  const { error: uploadErr } = await supabase.storage
+    .from(SLIP_BUCKET)
+    .upload(path, file, { contentType: file.type, upsert: false });
+  if (uploadErr) throw uploadErr;
+
+  const { data: ok, error } = await supabase.rpc('bridgethings_submit_subscription_proof', {
+    p_sub_id:       subId,
+    p_amount:       Number(amount),
+    p_payment_date: paymentDate,
+    p_method:       method || 'bank_transfer',
+    p_receipt_url:  path,
+  });
+  if (error) throw error;
+  if (!ok)   throw new Error('Could not attach the proof — the request may no longer be pending. Please refresh.');
+
+  // Tell accountants a subscription payment proof is ready to verify.
+  const ctx = await unitContext(
+    (await supabase.from(TABLE).select('unit_id').eq('id', subId).maybeSingle()).data?.unit_id,
+  );
+  notify('sub_payment_submitted', { group: 'accountants' },
+    { partnerName: ctx.party?.partner?.name || 'A partner', partnerEmail: ctx.party?.partner?.email,
+      amount: fmtAmount(amount), productName: ctx.productName },
+    { relatedOrderId: ctx.orderId });
+}
+
+// Signed URL so an accountant (or the partner) can open a subscription slip
+// from the private bucket. Same bucket as order slips.
+export async function getSubscriptionSlipUrl(path) {
+  if (!path) return null;
+  const { data, error } = await supabase.storage
+    .from(SLIP_BUCKET)
+    .createSignedUrl(path, 60 * 10); // 10 minutes
+  if (error) {
+    console.error('[subscriptions] signed url failed:', error);
+    return null;
+  }
+  return data?.signedUrl || null;
+}
+
+// Accountant rejects a SUBMITTED proof — sends it back to 'pending' with a
+// note so the partner can re-upload a correct slip. (Distinct from declining a
+// request outright, which cancels it.) Accountants have a staff UPDATE policy,
+// so this is a direct update.
+export async function rejectSubscriptionProof(subId, note) {
+  if (!subId)        throw new Error('subId is required');
+  if (!note?.trim()) throw new Error('Please add a note explaining the rejection');
+  const { data, error } = await supabase
+    .from(TABLE)
+    .update({ status: 'pending', rejection_note: note.trim(), updated_at: new Date().toISOString() })
+    .eq('id', subId)
+    .select('unit_id')
+    .maybeSingle();
+  if (error) throw error;
+
+  // Tell the partner their proof was rejected + why, so they can re-upload.
+  if (data?.unit_id) {
+    const ctx = await unitContext(data.unit_id);
+    if (ctx.party?.partner?.email) {
+      notify('sub_payment_rejected',
+        { email: ctx.party.partner.email, role: 'partner', userId: ctx.party.partner.id },
+        { partnerName: ctx.party.partner.name, productName: ctx.productName, notes: note.trim() },
+        { relatedOrderId: ctx.orderId });
+    }
+  }
+}
+
+// Fetch a unit's dashboard credentials on demand. The password is NEVER put
+// in the device-list payload — it comes only from this SECURITY DEFINER RPC,
+// which re-checks ownership + active paid coverage server-side. Returns
+// { username, password } or throws ('Not authorized' / 'Subscription is not
+// active…') so an expired-subscription partner can't read the password.
+export async function getDashboardCredentials(unitId) {
+  if (!unitId) throw new Error('unitId is required');
+  const { data, error } = await supabase.rpc('bridgethings_get_dashboard_credentials', { p_unit_id: unitId });
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  return { username: row?.dashboard_username || '', password: row?.dashboard_password || '' };
 }
 
 // Set/update the external dashboard credentials on a unit. Captured by
