@@ -104,7 +104,14 @@ export default function PartnerDevices() {
     return map;
   }, [subs]);
 
-  const rows = useMemo(() => units.map(u => {
+  // Only show devices from orders that have actually been DELIVERED — a
+  // dashboard subscription only applies to a device the customer has in hand.
+  // order-level delivered_date is set only when the whole order is delivered
+  // (the shipment rollup clears it otherwise), so a shipped-but-not-delivered
+  // device won't appear yet. Same gate as the admin Subscriptions page.
+  const rows = useMemo(() => units
+    .filter(u => Boolean(u.item?.order?.delivered_date))
+    .map(u => {
     const unitSubs = subsByUnit[u.id] || [];
     // Cancelled rows never represent the device here: a device whose subs
     // are ALL cancelled must derive 'none' (selectable for a fresh request)

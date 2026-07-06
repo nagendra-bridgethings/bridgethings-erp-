@@ -87,19 +87,26 @@ export default function Subscriptions() {
     return map;
   }, [subs]);
 
-  // Build flat rows for the table: every unit + its latest sub (if any).
-  const rows = useMemo(() => units.map(u => {
-    const unitSubs = subsByUnit[u.id] || [];
-    const latest   = latestSubFor(unitSubs);
-    return {
-      unit:    u,
-      partner: getPartner(u.item?.order?.partner_id),
-      product: u.item?.product,
-      latest,
-      status:  effectiveStatus(latest),
-      history: unitSubs,
-    };
-  }), [units, subsByUnit, getPartner]);
+  // Build flat rows for the table — ONLY for units whose order has actually
+  // been DELIVERED. Units are auto-created the moment a PO is submitted, so
+  // without this gate a pending/in-production order's devices would show up
+  // as subscription-eligible before the customer even has them. order-level
+  // delivered_date is set only once the whole order is delivered (cleared
+  // otherwise), and is the same signal the partner My Devices page uses.
+  const rows = useMemo(() => units
+    .filter(u => Boolean(u.item?.order?.delivered_date))
+    .map(u => {
+      const unitSubs = subsByUnit[u.id] || [];
+      const latest   = latestSubFor(unitSubs);
+      return {
+        unit:    u,
+        partner: getPartner(u.item?.order?.partner_id),
+        product: u.item?.product,
+        latest,
+        status:  effectiveStatus(latest),
+        history: unitSubs,
+      };
+    }), [units, subsByUnit, getPartner]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
